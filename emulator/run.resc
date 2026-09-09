@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
+mach create "n0120"
+machine LoadPlatformDescription @emulator/n0120.repl
+python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x60000000)"
+sysbus Unregister qspi
+python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58026000)"
+python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58000400)"
+python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58002400)"
+python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x40022000)"
+machine LoadPlatformDescription @emulator/n0120_lcd.repl
+machine LoadPlatformDescription @emulator/n0120_ospi.repl
+machine LoadPlatformDescription @emulator/n0120_adc3.repl
+machine LoadPlatformDescription @emulator/n0120_syscfg.repl
+machine LoadPlatformDescription @emulator/n0120_usb.repl
+machine LoadPlatformDescription @emulator/n0120_adc12.repl
+machine LoadPlatformDescription @emulator/n0120_lptim2.repl
+sysbus LoadBinary @emulator/state/internal.bin 0x08000000
+sysbus LoadBinary @emulator/state/external.bin 0x90000000
+cpu VectorTableOffset 0x08000000
+
+macro persistStorage
+"""
+    pause
+    python "import os; state=os.path.join(os.environ.get('LIBRECALC_ROOT', '.'), 'emulator', 'state'); open(os.path.join(state, 'internal.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x08000000, 0x80000))); open(os.path.join(state, 'external.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x90000000, 0x800000)))"
+"""
+
+start

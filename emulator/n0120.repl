@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Initial scaffold: Renode's STM32H743 H7 model supplies the CPU and common
+// peripherals until N0120-specific models are added.
+
+using "platforms/cpus/stm32h743.repl"
+
+// N0120 external QSPI flash: 8 MiB at the XIP address used by both slots.
+n0120ExternalFlash: Memory.MappedMemory @ sysbus 0x90000000
+    size: 0x800000
+
+// N0120-only H7B0 peripheral banks missing from Renode's H743 platform.
+// The stock boot flow configures these registers before using the LCD path.
+n0120Fmc: Memory.MappedMemory @ sysbus 0x52004000
+    size: 0x1000
+
+n0120Dmamux2: Memory.MappedMemory @ sysbus 0x58025800
+    size: 0x400
+
+// N0120 PWR state, including the PA0/WKUP1 event that starts stock boot.
+n0120Power: N0120Power @ sysbus 0x58024800
+    preinit:
+        include @n0120_power.cs
+
+// STM32H7 common blocks absent from Renode 1.16.1's H743 platform. These
+// bring-up models only provide the status needed by stock early init.
+n0120Crs: Python.PythonPeripheral @ sysbus 0x40008400
+    size: 0x400
+    initable: false
+    script: '''
+if request.IsRead:
+    request.Value = 0
+'''
+
+n0120Vref: Python.PythonPeripheral @ sysbus 0x58003C00
+    size: 0x400
+    initable: false
+    script: '''
+if request.IsRead:
+    request.Value = 0x8
+'''
+
+// N0120's keypad is a passive matrix: PA rows 1, 0, 2, 3, 6, 7, 8, 10 and 15
+// drive PC columns 1, 9, 11, 4, 5 and 6 through the pressed key's switch.
+// The registration point only exposes the host-side press/release API; it is
+// not an electrical connection. The matrix wiring is declared below.
+n0120Keypad: N0120KeyMatrix @ gpioPortA 0
+    preinit:
+        include @n0120_keypad.cs
+    0 -> gpioPortC@1
+    1 -> gpioPortC@9
+    2 -> gpioPortC@11
+    3 -> gpioPortC@4
+    4 -> gpioPortC@5
+    5 -> gpioPortC@6
+    6 -> n0120Power@0
+
+gpioPortA:
+    1 -> n0120Keypad@0
+    0 -> n0120Keypad@1
+    2 -> n0120Keypad@2
+    3 -> n0120Keypad@3
+    6 -> n0120Keypad@4
+    7 -> n0120Keypad@5
+    8 -> n0120Keypad@6
+    10 -> n0120Keypad@7
+    15 -> n0120Keypad@8

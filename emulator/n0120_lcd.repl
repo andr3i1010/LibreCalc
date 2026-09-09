@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// ST7789V-compatible LCD command/data windows and PB1 tearing-effect output.
+
+n0120Lcd: N0120Lcd @ sysbus 0x60000000
+    preinit:
+        include @n0120_lcd.cs
+    0 -> gpioPortB@1

@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// STM32H7A3/H7B0 OCTOSPI1 register subset used by the N0120 stock bring-up.
+// The XIP aperture remains n0120ExternalFlash at 0x90000000.
+
+n0120Ospi1: Python.PythonPeripheral @ sysbus 0x52005000
+    size: 0x1000
+    initable: true
+    script: '''
+if request.IsInit:
+    regs = [0] * 1024
+    status = 0
+    instruction = 0
+    write_enable = False
+elif request.IsWrite:
+    if request.Offset == 0x24:
+        status &= ~(request.Value & 0x1F)
+    else:
+        regs[request.Offset >> 2] = request.Value
+        if request.Offset == 0x110:
+            instruction = request.Value & 0xFF
+            if instruction == 0x06:
+                write_enable = True
+            elif instruction in (0x66, 0x99):
+                write_enable = False
+            status = (status & ~0x20) | 0x02
+elif request.IsRead:
+    if request.Offset == 0x20:
+        request.Value = status
+    elif request.Offset == 0x50:
+        if instruction == 0x05:
+            request.Value = 0x02 if write_enable else 0
+        else:
+            request.Value = 0
+    else:
+        request.Value = regs[request.Offset >> 2]
+'''

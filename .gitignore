@@ -1,0 +1,7 @@
+/build/
+/emulator/state/
+__pycache__/
+*.py[cod]
+.superpowers/
+*.gpr
+*.rep/

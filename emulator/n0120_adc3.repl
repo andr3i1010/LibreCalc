@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Minimal H7 ADC3 compatibility model for stock early initialization.
+
+n0120Adc3: Python.PythonPeripheral @ sysbus 0x58026000
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    regs = [0] * 256
+    regs[2] = 0x10000001
+    regs[0x40 >> 2] = 0x800
+elif request.IsWrite:
+    regs[request.Offset >> 2] = request.Value
+    if request.Offset == 0x08:
+        regs[2] &= 0x7FFFFFFF
+        if request.Value & 0x00000002:
+            regs[2] &= ~0x00000003
+        regs[0] = 0x00000004
+elif request.IsRead:
+    request.Value = regs[request.Offset >> 2]
+    if request.Offset == 0x40:
+        regs[0] |= 0x00000008
+'''

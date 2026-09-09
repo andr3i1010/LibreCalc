@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// H7 ADC1/2 register subset. The virtual calculator starts with a fully
+// charged 4.10 V battery, represented on the stock 0–5 V ADC scale.
+
+n0120Adc12: Python.PythonPeripheral @ sysbus 0x40022000
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    regs = [0] * 256
+    regs[0x40 >> 2] = 0xD1EB
+    regs[0x140 >> 2] = 0xD1EB
+elif request.IsWrite:
+    index = request.Offset >> 2
+    bank = request.Offset & ~0xFF
+    register = request.Offset & 0xFF
+    if register == 0x00:
+        regs[bank >> 2] &= ~request.Value
+    elif register == 0x08:
+        regs[index] = request.Value
+        if request.Value & 0x00000002:
+            regs[index] &= ~0x00000001
+        if request.Value & 0x10000000:
+            regs[bank >> 2] |= 0x00001000
+        if request.Value & 0x80000000:
+            regs[index] &= ~0x80000000
+            regs[bank >> 2] |= 0x00000800
+        if request.Value & 0x00000001:
+            regs[bank >> 2] |= 0x00000001
+        if request.Value & 0x00000004:
+            regs[bank >> 2] |= 0x00000004
+    else:
+        regs[index] = request.Value
+elif request.IsRead:
+    request.Value = regs[request.Offset >> 2]
+    if (request.Offset & 0xFF) == 0x40:
+        regs[(request.Offset & ~0xFF) >> 2] &= ~0x00000004
+'''
