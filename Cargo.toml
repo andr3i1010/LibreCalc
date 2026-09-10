@@ -1,0 +1,24 @@
+[workspace]
+members = ["bootloader", "hardware", "kernel"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+cortex-m = { version = "=0.7.9", features = ["cm7", "critical-section-single-core"] }
+cortex-m-rt = "=0.7.6"
+n0120-hardware = { path = "hardware" }
+stm32h7 = { version = "=0.16.0", default-features = false, features = ["critical-section", "rt", "stm32h725"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+panic = "abort"

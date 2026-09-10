@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Small, strict STM DfuSe packer and virtual-flash writer for N0120."""
+"""Small, strict STM DfuSe tooling for the LibreCalc N0120 emulator as dfu-util doesnt support the virtual flash."""
 
 import argparse
 import binascii
@@ -130,7 +130,7 @@ def _atomic_write(path, data):
             os.unlink(temporary)
 
 
-def flash(image, state):
+def flash_virtual(image, state):
     parsed = parse(image)
     state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
@@ -148,7 +148,7 @@ def flash(image, state):
         storage[name][offset : offset + len(payload)] = payload
     for name, payload in storage.items():
         _atomic_write(state / f"{name}.bin", payload)
-    print(f"flashed {image} into {state} ({len(parsed['elements'])} elements)")
+    print(f"flashed {image} into virtual storage {state} ({len(parsed['elements'])} elements)")
 
 
 def inspect(image):
@@ -168,13 +168,13 @@ def self_test():
         original.write_bytes(_image([(0x08000000, b"boot"), (0x90000000, b"slot-a")]))
         assert len(parse(original)["elements"]) == 2
         state = root / "state"
-        flash(original, state)
+        flash_virtual(original, state)
         assert (state / "internal.bin").read_bytes()[:4] == b"boot"
         assert (state / "external.bin").read_bytes()[:6] == b"slot-a"
         external = (state / "external.bin").read_bytes()
         replacement = root / "replacement.dfu"
         replacement.write_bytes(_image([(0x08000001, b"new")]))
-        flash(replacement, state)
+        flash_virtual(replacement, state)
         assert (state / "external.bin").read_bytes() == external
         damaged = bytearray(original.read_bytes())
         damaged[20] ^= 1
@@ -197,7 +197,7 @@ def main():
     pack.add_argument("elements", nargs="+")
     inspect_parser = commands.add_parser("inspect")
     inspect_parser.add_argument("image")
-    flash_parser = commands.add_parser("flash")
+    flash_parser = commands.add_parser("flash-virtual")
     flash_parser.add_argument("image")
     flash_parser.add_argument("state")
     commands.add_parser("self-test")
@@ -214,8 +214,8 @@ def main():
             inspect(args.output)
         elif args.command == "inspect":
             inspect(args.image)
-        elif args.command == "flash":
-            flash(args.image, args.state)
+        elif args.command == "flash-virtual":
+            flash_virtual(args.image, args.state)
         else:
             self_test()
     except (OSError, ValueError) as error:

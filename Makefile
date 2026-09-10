@@ -3,61 +3,60 @@
 BUILD ?= build
 PYTHON ?= python3
 RENODE ?= renode
+CARGO ?= cargo
 CROSS ?= arm-none-eabi-
-CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 SIZE := $(CROSS)size
 CXX ?= c++
 QT_HEADERS ?= $(shell qmake6 -query QT_INSTALL_HEADERS 2>/dev/null)
 QT_LIBS ?= $(shell qmake6 -query QT_INSTALL_LIBS 2>/dev/null)
 
-CPUFLAGS := -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16
-CFLAGS := $(CPUFLAGS) -std=c11 -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections -Wall -Wextra -Werror
-LDFLAGS := -nostdlib -Wl,--gc-sections,-Map=$(BUILD)/bootloader.map \
-	-Wl,-T,boot/n0120.ld
-
-INTERNAL_DFU := $(BUILD)/librecalc-internal.dfu
+RUST_TARGET := thumbv7em-none-eabihf
+CARGO_OUT := target/$(RUST_TARGET)/release
+BOOTLOADER_ELF := $(BUILD)/librecalc-bootloader.elf
+BOOTLOADER_BIN := $(BUILD)/librecalc-bootloader.bin
+BOOTLOADER_DFU := $(BUILD)/librecalc-bootloader.dfu
+KERNEL_ELF := $(BUILD)/librecalc-kernel.elf
+KERNEL_BIN := $(BUILD)/librecalc-kernel.bin
+KERNEL_DFU := $(BUILD)/librecalc-kernel.dfu
+FIRMWARE_DFU := $(BUILD)/librecalc.dfu
 STATE := emulator/state
 
-.PHONY: all help clean test flash-virtual run panel run-panel test-panel
+.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-panel
 
-all: $(INTERNAL_DFU)
+all: bootloader kernel
+	$(PYTHON) tools/dfuse.py pack $(FIRMWARE_DFU) \
+		0x08000000:$(BOOTLOADER_BIN) 0x90000000:$(KERNEL_BIN)
 
 help:
-	@echo 'make                         build the internal-flash DfuSe image'
-	@echo 'make test                    build and run parser/storage checks'
+	@echo 'make                         build the bootloader, kernel, and combined DfuSe image'
+	@echo 'make bootloader              build the bootloader artifacts'
+	@echo 'make kernel                  build the kernel artifacts'
 	@echo 'make flash-virtual IMAGE=x   write a DfuSe into Renode virtual flash'
-	@echo 'make run                     start Renode with emulator/state/'
-	@echo 'make panel                   build the local calculator window'
 	@echo 'make run-panel               start the local calculator window'
 	@echo 'make test-panel              check and render the calculator window'
+	@echo 'make clean                   remove generated files'
 
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/bootloader.elf: boot/bootloader.c boot/n0120.ld | $(BUILD)
-	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
-	$(SIZE) $@
+bootloader: | $(BUILD)
+	$(CARGO) build --release --package librecalc-bootloader
+	cp $(CARGO_OUT)/librecalc-bootloader $(BOOTLOADER_ELF)
+	$(SIZE) $(BOOTLOADER_ELF)
+	$(OBJCOPY) -O binary $(BOOTLOADER_ELF) $(BOOTLOADER_BIN)
+	$(PYTHON) tools/dfuse.py pack $(BOOTLOADER_DFU) 0x08000000:$(BOOTLOADER_BIN)
 
-$(BUILD)/bootloader.bin: $(BUILD)/bootloader.elf
-	$(OBJCOPY) -O binary $< $@
-
-$(INTERNAL_DFU): $(BUILD)/bootloader.bin tools/dfuse.py
-	$(PYTHON) tools/dfuse.py pack $@ 0x08000000:$<
-
-test: all
-	$(PYTHON) tools/dfuse.py self-test
-	$(PYTHON) tools/dfuse.py inspect $(INTERNAL_DFU)
+kernel: | $(BUILD)
+	$(CARGO) build --release --package librecalc-kernel
+	cp $(CARGO_OUT)/librecalc-kernel $(KERNEL_ELF)
+	$(SIZE) $(KERNEL_ELF)
+	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	$(PYTHON) tools/dfuse.py pack $(KERNEL_DFU) 0x90000000:$(KERNEL_BIN)
 
 flash-virtual:
 	test -n "$(IMAGE)" || (echo 'usage: make flash-virtual IMAGE=path/to/image.dfu' >&2; exit 2)
-	$(PYTHON) tools/dfuse.py flash "$(IMAGE)" $(STATE)
-
-run:
-	test -f $(STATE)/internal.bin || (echo 'flash a DfuSe first' >&2; exit 2)
-	test -f $(STATE)/external.bin || (echo 'flash a DfuSe first' >&2; exit 2)
-	LIBRECALC_ROOT=$(CURDIR) $(RENODE) emulator/run.resc
+	$(PYTHON) tools/dfuse.py flash-virtual "$(IMAGE)" $(STATE)
 
 panel: $(BUILD)/librecalc-panel
 
@@ -73,4 +72,4 @@ test-panel: panel
 	QT_QPA_PLATFORM=offscreen LIBRECALC_ROOT=$(CURDIR) $(BUILD)/librecalc-panel --self-test
 
 clean:
-	rm -rf -- $(BUILD)
+	rm -rf -- build target
