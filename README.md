@@ -35,6 +35,7 @@ should move into a new shared crate only after both programs genuinely need it.
 - Python 3
 - Renode (tested with 1.16.1)
 - Qt 6 development files and `qmake6`
+- Optional virtual USB on Linux: `usbip` and `pkexec`
 
 Rustup reads `rust-toolchain.toml` and installs the pinned compiler, formatter,
 linter, editor engine, and Cortex-M target.
@@ -88,14 +89,6 @@ RENODE=/path/to/renode make run-panel
 
 Cargo stores compiler intermediates in `target/`. Final firmware images,
 ELFs with debug symbols, and emulator outputs go in `build/`.
-
-## Clean-room boundary
-
-Firmware images, virtual flash contents, LCD captures, Ghidra projects,
-decompiler output, and all build output are excluded from version control.
-LibreCalc does not distribute NumWorks firmware, source code, or artwork.
-Any necessary reverse engineering must be reduced to behavioral notes before
-an independent implementation is written.
 
 ## License
 

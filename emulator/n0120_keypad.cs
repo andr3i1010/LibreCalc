@@ -28,12 +28,11 @@ namespace Antmicro.Renode.Peripherals
 
         public void Reset()
         {
-            Array.Clear(pressed, 0, pressed.Length);
             for(var column = 0; column < Columns; column++)
             {
                 Connections[column].Set(true);
             }
-            Connections[WakeupOutput].Set(false);
+            Connections[WakeupOutput].Set(pressed[1, 2]);
         }
 
         public void OnGPIO(int row, bool value)

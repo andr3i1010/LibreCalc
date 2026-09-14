@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Minimal USB1 OTG-HS idle status for stock early initialization.
+// STM32H725 OTG-HS device controller used by the N0120's EP0-only USB stack.
 
-n0120Usb1OtgHs: Python.PythonPeripheral @ sysbus 0x40040000
-    size: 0x1000
-    initable: true
-    script: '''
-if request.IsInit:
-    regs = [0] * 1024
-    regs[4] = 0x80000000
-elif request.IsWrite:
-    regs[request.Offset >> 2] = request.Value
-    if request.Offset == 0x10:
-        regs[4] = (request.Value & 0xFFFFFFFE) | 0x80000000
-elif request.IsRead:
-    request.Value = regs[request.Offset >> 2]
-'''
+n0120Usb1OtgHs: N0120UsbOtgHs @ sysbus 0x40040000
+    preinit:
+        include @n0120_usb.cs
+    0 -> nvic@77
+    1 -> gpioPortA@9

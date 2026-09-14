@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QEventPoint>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
@@ -16,6 +17,7 @@
 #include <QRadialGradient>
 #include <QRegularExpression>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -30,8 +32,10 @@ namespace {
 constexpr qreal CanvasWidth = 1130.0;
 constexpr qreal CanvasHeight = 2340.0;
 const QRectF ScreenRect(167.0, 173.0, 796.0, 597.0);
+const QRectF UsbRect(305.0, 2228.0, 82.0, 82.0);
 const QRectF ScreenshotRect(451.0, 2228.0, 82.0, 82.0);
 const QRectF FullscreenRect(597.0, 2228.0, 82.0, 82.0);
+const QRectF ResetRect(743.0, 2228.0, 82.0, 82.0);
 
 enum class KeyStyle { Dpad, Round, Home, Power, Small, Large };
 
@@ -184,6 +188,30 @@ bool decodeLedMarker(const QByteArray &bytes, QColor *color) {
     return true;
 }
 
+bool decodeUsbMarker(const QByteArray &bytes, quint32 *status) {
+    static const QRegularExpression marker(QStringLiteral("LCUSB:([0-9A-Fa-f]+)"));
+    const QRegularExpressionMatch match = marker.match(QString::fromLatin1(bytes));
+    if (!match.hasMatch()) {
+        return false;
+    }
+    bool valid = false;
+    *status = match.captured(1).toUInt(&valid, 16);
+    return valid;
+}
+
+QSet<int> decodeVhciPorts(const QByteArray &bytes) {
+    QSet<int> ports;
+    for (const QByteArray &line : bytes.split('\n')) {
+        const QList<QByteArray> fields = line.simplified().split(' ');
+        bool valid = false;
+        const int port = fields.size() >= 7 ? fields[1].toInt(&valid) : -1;
+        if (valid && fields[6] != "0-0") {
+            ports.insert(port);
+        }
+    }
+    return ports;
+}
+
 } // namespace
 
 class Panel final : public QWidget {
@@ -214,18 +242,104 @@ public:
                 "b.ReadDoubleWord(0x40010038),b.ReadDoubleWord(0x4001003C),"
                 "b.ReadDoubleWord(0x40010044)))\""));
         });
+        connect(&usbPoll, &QTimer::timeout, this, [this] {
+            if (monitor.state() != QAbstractSocket::ConnectedState) {
+                return;
+            }
+            sendCommand(QStringLiteral(
+                "python \"b=self.Machine['sysbus']; print('LCUSB:%X' % b.ReadDoubleWord(0x40040e04))\""));
+        });
         connect(&monitor, &QTcpSocket::readyRead, this, [this] {
             monitorBuffer += monitor.readAll();
-            QColor decoded;
-            if (decodeLedMarker(monitorBuffer, &decoded)) {
-                ledColor = decoded;
-                ledQueryPending = false;
-                monitorBuffer.clear();
-                update();
+            int newline = 0;
+            while ((newline = monitorBuffer.indexOf('\n')) >= 0) {
+                const QByteArray line = monitorBuffer.left(newline);
+                monitorBuffer.remove(0, newline + 1);
+                QColor decoded;
+                if (decodeLedMarker(line, &decoded)) {
+                    ledColor = decoded;
+                    ledQueryPending = false;
+                    update();
+                }
+                quint32 status = 0;
+                if (decodeUsbMarker(line, &status)) {
+                    handleUsbStatus(status);
+                }
+                if (line.contains("LCBOOT")) {
+                    const QSet<int> keys = bootKeysToRelease;
+                    bootKeysToRelease.clear();
+                    QTimer::singleShot(500, this, [this, keys] {
+                        for (int index : keys) {
+                            if (!held.contains(index)) {
+                                sendCommand(QStringLiteral("gpioPortA.n0120Keypad Release \"%1\"")
+                                                .arg(QLatin1String(Keys[index].name)));
+                            }
+                        }
+                    });
+                }
             }
             if (monitorBuffer.size() > 4096) {
                 monitorBuffer = monitorBuffer.right(1024);
             }
+        });
+        connect(&usbCommand, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+                [this](int exitCode, QProcess::ExitStatus exitStatus) {
+                    finishUsbCommand(exitCode == 0 && exitStatus == QProcess::NormalExit);
+                });
+        connect(&usbCommand, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) {
+                usbFailure(QStringLiteral("Could not start the virtual USB helper"));
+            }
+        });
+        connect(&renode, &QProcess::errorOccurred, this, [this] {
+            if (!restarting) {
+                setStatus(QStringLiteral("Renode failed to start\nCheck the RENODE command"), true);
+            }
+        });
+        connect(&renode, &QProcess::finished, this, [this] {
+            if (restarting && !closing) {
+                restarting = false;
+                monitor.abort();
+                monitorBuffer.clear();
+                startRenode();
+            } else if (!closing) {
+                setStatus(QStringLiteral("Renode stopped"), true);
+            }
+        });
+        connect(&connector, &QTimer::timeout, this, [this] {
+            if (monitor.state() == QAbstractSocket::UnconnectedState) {
+                monitor.connectToHost(QHostAddress::LocalHost, port);
+            }
+        });
+        connect(&monitor, &QTcpSocket::connected, this, [this] {
+            connector.stop();
+            QTimer::singleShot(300, this, [this] {
+                const bool connectUsb = usbBeforeBoot;
+                usbBeforeBoot = false;
+                QSet<int> keys = resetHeldKeys;
+                for (int index : held.keys()) {
+                    keys.insert(index);
+                }
+                bootedDfu = keys.contains(keyIndex("6"));
+                bootKeysToRelease = resetHeldKeys;
+                resetHeldKeys.clear();
+                sendCommand(QStringLiteral("include @emulator/n0120_prepare.resc"));
+                if (connectUsb) {
+                    usbState = UsbState::Waiting;
+                    writeUsbControl(1);
+                    usbPoll.start(250);
+                }
+                for (int index : keys) {
+                    sendCommand(QStringLiteral("gpioPortA.n0120Keypad Press \"%1\"")
+                                    .arg(QLatin1String(Keys[index].name)));
+                }
+                sendCommand(QStringLiteral("start"));
+                if (!bootKeysToRelease.isEmpty()) {
+                    sendCommand(QStringLiteral("python \"print('LCBOOT')\""));
+                }
+                setStatus(QStringLiteral("Waiting for the LCD…"), false);
+                ledPoll.start(100);
+            });
         });
 
         if (startEmulator) {
@@ -237,6 +351,9 @@ public:
     ~Panel() override {
         releaseAllInput();
         closing = true;
+        restarting = false;
+        usbPoll.stop();
+        writeUsbControl(0);
         if (monitor.state() == QAbstractSocket::ConnectedState) {
             sendCommand(QStringLiteral("runMacro $persistStorage"));
             sendCommand(QStringLiteral("quit"));
@@ -263,8 +380,9 @@ public:
             *failure = QStringLiteral("key count or LCD aspect ratio failed");
             return false;
         }
-        if (utilityAt(ScreenshotRect.center()) != 0 || utilityAt(FullscreenRect.center()) != 1 ||
-            hitKey(ScreenshotRect.center()) != -1) {
+        if (utilityAt(UsbRect.center()) != 0 || utilityAt(ScreenshotRect.center()) != 1 ||
+            utilityAt(FullscreenRect.center()) != 2 ||
+            utilityAt(ResetRect.center()) != 3 || hitKey(ResetRect.center()) != -1) {
             *failure = QStringLiteral("utility hit testing failed");
             return false;
         }
@@ -288,6 +406,15 @@ public:
             decodeLedMarker("LCLED:not-a-register-dump", &decoded) ||
             !decodeLedMarker("LCLED:0:111:3A:0:0:0:8000", &decoded) || decoded != Qt::black) {
             *failure = QStringLiteral("LED monitor decoding failed");
+            return false;
+        }
+        quint32 usbStatus = 0;
+        if (!decodeUsbMarker("LCUSB:7", &usbStatus) || usbStatus != 7 ||
+            decodeUsbMarker("LCUSB:not-a-status", &usbStatus) ||
+            decodeVhciPorts("hub port sta spd dev sockfd local_busid\n"
+                            "hs 0000 006 003 00010000 000003 5-1\n"
+                            "hs 0001 004 000 00000000 000000 0-0\n") != QSet<int>{0}) {
+            *failure = QStringLiteral("USB monitor decoding failed");
             return false;
         }
 
@@ -385,9 +512,9 @@ protected:
             painter.setFont(statusFont);
             painter.drawText(ScreenRect.adjusted(70, 70, -70, -70),
                              Qt::AlignCenter | Qt::TextWordWrap, statusText);
-        } else if (statusIsError && !statusText.isEmpty()) {
+        } else if (!statusText.isEmpty() && (statusIsError || usbState != UsbState::Off)) {
             const QRectF errorRect(ScreenRect.left(), ScreenRect.bottom() - 82, ScreenRect.width(), 82);
-            painter.fillRect(errorRect, QColor(24, 27, 29, 220));
+            painter.fillRect(errorRect, statusIsError ? QColor(24, 27, 29, 220) : QColor(23, 80, 102, 220));
             painter.setPen(Qt::white);
             QFont errorFont(QStringLiteral("Sans Serif"));
             errorFont.setPixelSize(25);
@@ -425,8 +552,10 @@ protected:
             drawKey(painter, static_cast<int>(i));
         }
 
-        drawUtility(painter, ScreenshotRect, 0, utilityDown == 0, utilityHover == 0);
-        drawUtility(painter, FullscreenRect, 1, utilityDown == 1, utilityHover == 1);
+        drawUtility(painter, UsbRect, 0, utilityDown == 0, utilityHover == 0);
+        drawUtility(painter, ScreenshotRect, 1, utilityDown == 1, utilityHover == 1);
+        drawUtility(painter, FullscreenRect, 2, utilityDown == 2, utilityHover == 2);
+        drawUtility(painter, ResetRect, 3, utilityDown == 3, utilityHover == 3);
     }
 
     void mousePressEvent(QMouseEvent *event) override {
@@ -456,9 +585,15 @@ protected:
         }
         const int hoverKey = hitKey(point);
         if (utilityHover == 0) {
-            setToolTip(QStringLiteral("Save LCD screenshot (Ctrl+S)"));
+            setToolTip(usbState == UsbState::Connected
+                           ? QStringLiteral("Disconnect virtual USB")
+                           : QStringLiteral("Connect virtual USB"));
         } else if (utilityHover == 1) {
+            setToolTip(QStringLiteral("Save LCD screenshot (Ctrl+S)"));
+        } else if (utilityHover == 2) {
             setToolTip(QStringLiteral("Toggle fullscreen (F11)"));
+        } else if (utilityHover == 3) {
+            setToolTip(QStringLiteral("Press rear RESET button"));
         } else if (hoverKey >= 0) {
             setToolTip(QLatin1String(Keys[hoverKey].name));
         } else {
@@ -480,7 +615,15 @@ protected:
         mouseKey = -1;
         update();
         if (activate) {
-            action == 0 ? saveScreenshot() : toggleFullscreen();
+            if (action == 0) {
+                toggleUsb();
+            } else if (action == 1) {
+                saveScreenshot();
+            } else if (action == 2) {
+                toggleFullscreen();
+            } else {
+                resetCalculator();
+            }
         }
         event->accept();
     }
@@ -579,11 +722,15 @@ protected:
     }
 
 private:
+    enum class UsbState { Off, Waiting, Exporting, LoadingModule, Attaching, FindingPort, Connected, Detaching, Failed };
+
     QProcess renode;
+    QProcess usbCommand;
     QTcpSocket monitor;
     QTimer connector;
     QTimer screenRefresh;
     QTimer ledPoll;
+    QTimer usbPoll;
     QImage display;
     QColor ledColor = Qt::black;
     QByteArray monitorBuffer;
@@ -592,15 +739,28 @@ private:
     QHash<int, int> touchKeys;
     QString rootPath;
     QString statusText = QStringLiteral("Starting calculator…");
+    QString usbipPath;
+    QString pkexecPath;
+    QString modprobePath;
     quint16 port = 0;
     qint64 screenTimestamp = -1;
     int mouseKey = -1;
     int utilityDown = -1;
     int utilityHover = -1;
+    int vhciPort = -1;
+    int vhciPortAttempts = 0;
+    QSet<int> vhciPortsBefore;
+    UsbState usbState = UsbState::Off;
     bool hasDisplay = false;
     bool statusIsError = false;
     bool closing = false;
     bool ledQueryPending = false;
+    bool resetPending = false;
+    bool restarting = false;
+    bool usbBeforeBoot = false;
+    bool bootedDfu = false;
+    QSet<int> resetHeldKeys;
+    QSet<int> bootKeysToRelease;
 
     QTransform canvasTransform() const {
         const qreal margin = 12.0;
@@ -627,11 +787,17 @@ private:
     }
 
     static int utilityAt(const QPointF &point) {
-        if (ScreenshotRect.contains(point)) {
+        if (UsbRect.contains(point)) {
             return 0;
         }
-        if (FullscreenRect.contains(point)) {
+        if (ScreenshotRect.contains(point)) {
             return 1;
+        }
+        if (FullscreenRect.contains(point)) {
+            return 2;
+        }
+        if (ResetRect.contains(point)) {
+            return 3;
         }
         return -1;
     }
@@ -780,19 +946,32 @@ private:
     void drawUtility(QPainter &painter, const QRectF &button, int action, bool down, bool hover) const {
         const QRectF drawn = button.translated(0, down ? 4 : 0);
         painter.setPen(QPen(QColor("#757b7f"), 2));
-        painter.setBrush(hover ? QColor("#ffffff") : QColor("#f2f4f5"));
+        painter.setBrush(usbState == UsbState::Connected && action == 0 ? QColor("#d7ebf4")
+                                                                         : hover ? QColor("#ffffff")
+                                                                                 : QColor("#f2f4f5"));
         painter.drawEllipse(drawn);
         painter.save();
         painter.translate(0, down ? 4 : 0);
-        painter.setPen(QPen(QColor("#454a4e"), 5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setPen(QPen(action == 0 && usbState == UsbState::Connected ? QColor("#1b7998")
+                                                                             : QColor("#454a4e"),
+                            5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.setBrush(Qt::NoBrush);
         if (action == 0) {
+            const QPointF c = button.center();
+            painter.drawLine(QPointF(c.x(), c.y() + 26), QPointF(c.x(), c.y() - 18));
+            painter.drawLine(QPointF(c.x(), c.y() - 5), QPointF(c.x() - 20, c.y() - 19));
+            painter.drawLine(QPointF(c.x(), c.y() - 5), QPointF(c.x() + 20, c.y() - 19));
+            painter.drawLine(QPointF(c.x() - 9, c.y() + 26), QPointF(c.x() + 9, c.y() + 26));
+            painter.drawEllipse(QRectF(c.x() - 6, c.y() - 26, 12, 12));
+            painter.drawEllipse(QRectF(c.x() - 26, c.y() - 25, 12, 12));
+            painter.drawRect(QRectF(c.x() + 14, c.y() - 25, 12, 12));
+        } else if (action == 1) {
             const QPointF c = button.center();
             painter.drawRoundedRect(QRectF(c.x() - 25, c.y() - 17, 50, 36), 5, 5);
             painter.drawEllipse(QRectF(c.x() - 9, c.y() - 10, 18, 18));
             painter.drawLine(QPointF(c.x() - 13, c.y() - 17), QPointF(c.x() - 5, c.y() - 25));
             painter.drawLine(QPointF(c.x() - 5, c.y() - 25), QPointF(c.x() + 7, c.y() - 25));
-        } else {
+        } else if (action == 2) {
             const QRectF r = button.adjusted(22, 22, -22, -22);
             painter.drawLine(r.topLeft(), QPointF(r.left() + 14, r.top()));
             painter.drawLine(r.topLeft(), QPointF(r.left(), r.top() + 14));
@@ -802,6 +981,16 @@ private:
             painter.drawLine(r.bottomLeft(), QPointF(r.left(), r.bottom() - 14));
             painter.drawLine(r.bottomRight(), QPointF(r.right() - 14, r.bottom()));
             painter.drawLine(r.bottomRight(), QPointF(r.right(), r.bottom() - 14));
+        } else {
+            const QPointF c = button.center();
+            painter.drawArc(QRectF(c.x() - 23, c.y() - 23, 46, 46), 35 * 16, 285 * 16);
+            QPainterPath arrow;
+            arrow.moveTo(c.x() - 27, c.y() - 13);
+            arrow.lineTo(c.x() - 9, c.y() - 16);
+            arrow.lineTo(c.x() - 19, c.y());
+            arrow.closeSubpath();
+            painter.setBrush(painter.pen().color());
+            painter.drawPath(arrow);
         }
         painter.restore();
     }
@@ -871,6 +1060,24 @@ private:
         isFullScreen() ? showNormal() : showFullScreen();
     }
 
+    void resetCalculator() {
+        resetHeldKeys.clear();
+        for (int index : held.keys()) {
+            resetHeldKeys.insert(index);
+        }
+        setStatus(QStringLiteral("Resetting calculator…"), false);
+        if (usbState == UsbState::Detaching) {
+            resetPending = true;
+        } else if (usbState != UsbState::Off && usbState != UsbState::Failed) {
+            usbBeforeBoot = true;
+            resetPending = true;
+            stopUsb();
+        } else {
+            stopUsb();
+            restartCalculator();
+        }
+    }
+
     void refreshScreen() {
         const QString path = rootPath + QStringLiteral("/emulator/state/lcd.ppm");
         const QFileInfo info(path);
@@ -886,7 +1093,7 @@ private:
             display = next.convertToFormat(QImage::Format_RGB32);
             screenTimestamp = modified;
             hasDisplay = true;
-            if (!statusIsError) {
+            if (!statusIsError && usbState == UsbState::Off) {
                 statusText.clear();
             }
             update();
@@ -897,6 +1104,190 @@ private:
         statusText = message;
         statusIsError = error;
         update();
+    }
+
+    void toggleUsb() {
+        if (usbState == UsbState::Off || usbState == UsbState::Failed) {
+            usbipPath = QStandardPaths::findExecutable(QStringLiteral("usbip"));
+            pkexecPath = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
+            modprobePath = QStandardPaths::findExecutable(QStringLiteral("modprobe"));
+            if (usbipPath.isEmpty() || pkexecPath.isEmpty() || modprobePath.isEmpty()) {
+                setStatus(QStringLiteral("Virtual USB needs usbip, pkexec, and modprobe"), true);
+                usbState = UsbState::Failed;
+                return;
+            }
+            if (monitor.state() != QAbstractSocket::ConnectedState) {
+                setStatus(QStringLiteral("Renode is not running"), true);
+                usbState = UsbState::Failed;
+                return;
+            }
+            if (bootedDfu) {
+                resetHeldKeys = {keyIndex("6")};
+                usbBeforeBoot = true;
+                setStatus(QStringLiteral("Restarting rescue mode with USB…"), false);
+                restartCalculator();
+                return;
+            }
+            vhciPort = -1;
+            usbState = UsbState::Waiting;
+            setStatus(QStringLiteral("Waiting for calculator USB…"), false);
+            writeUsbControl(1);
+            usbPoll.start(250);
+            update();
+            return;
+        }
+        stopUsb();
+    }
+
+    void writeUsbControl(quint32 value) {
+        sendCommand(QStringLiteral(
+            "python \"self.Machine['sysbus'].WriteDoubleWord(0x40040e08, %1)\"").arg(value));
+    }
+
+    void handleUsbStatus(quint32 status) {
+        const bool ready = status & 2;
+        const bool exported = status & 4;
+        if (status & 8) {
+            usbFailure(QStringLiteral("Virtual USB could not start (TCP port 3240 is busy)"));
+            return;
+        }
+        if (usbState == UsbState::Waiting && ready) {
+            usbState = UsbState::Exporting;
+            setStatus(QStringLiteral("Starting virtual USB…"), false);
+            writeUsbControl(3);
+        } else if (usbState == UsbState::Exporting && exported) {
+            usbState = UsbState::LoadingModule;
+            if (QFileInfo::exists(QStringLiteral("/sys/module/vhci_hcd"))) {
+                finishUsbCommand(true);
+            } else {
+                setStatus(QStringLiteral("Authorizing USB host access…"), false);
+                runUsbCommand(true, modprobePath, {QStringLiteral("vhci_hcd")});
+            }
+        } else if (usbState == UsbState::Connected && !exported) {
+            usbFailure(QStringLiteral("Virtual USB disconnected"));
+            return;
+        }
+        update();
+    }
+
+    void runUsbCommand(bool privileged, const QString &program, QStringList arguments) {
+        if (privileged) {
+            arguments.prepend(program);
+            usbCommand.start(pkexecPath, arguments);
+        } else {
+            usbCommand.start(program, arguments);
+        }
+    }
+
+    static QSet<int> usedVhciPorts() {
+        QFile status(QStringLiteral("/sys/devices/platform/vhci_hcd.0/status"));
+        return status.open(QIODevice::ReadOnly) ? decodeVhciPorts(status.readAll()) : QSet<int>();
+    }
+
+    void findVhciPort() {
+        QSet<int> ports = usedVhciPorts();
+        for (int port : vhciPortsBefore) {
+            ports.remove(port);
+        }
+        if (!ports.isEmpty()) {
+            vhciPort = *ports.constBegin();
+            usbState = UsbState::Connected;
+            setStatus(QStringLiteral("Virtual USB connected"), false);
+            return;
+        }
+        if (++vhciPortAttempts >= 20) {
+            usbFailure(QStringLiteral("Virtual USB attached, but no VHCI port appeared"));
+            return;
+        }
+        QTimer::singleShot(250, this, [this] {
+            if (usbState == UsbState::FindingPort) {
+                findVhciPort();
+            }
+        });
+    }
+
+    void finishUsbCommand(bool succeeded) {
+        if (usbState == UsbState::LoadingModule) {
+            if (!succeeded) {
+                usbFailure(QStringLiteral("USB host authorization was cancelled"));
+                return;
+            }
+            vhciPortsBefore = usedVhciPorts();
+            vhciPortAttempts = 0;
+            usbState = UsbState::Attaching;
+            setStatus(QStringLiteral("Connecting virtual USB…"), false);
+            runUsbCommand(true, usbipPath,
+                          {QStringLiteral("attach"), QStringLiteral("-r"), QStringLiteral("127.0.0.1"),
+                           QStringLiteral("-b"), QStringLiteral("1-0")});
+            return;
+        }
+        if (usbState == UsbState::Attaching) {
+            if (!succeeded) {
+                usbFailure(QStringLiteral("The host could not attach virtual USB"));
+                return;
+            }
+            usbState = UsbState::FindingPort;
+            findVhciPort();
+            return;
+        }
+        if (usbState == UsbState::Detaching) {
+            writeUsbControl(0);
+            usbPoll.stop();
+            usbState = succeeded ? UsbState::Off : UsbState::Failed;
+            vhciPort = -1;
+            setStatus(succeeded ? QString() : QStringLiteral("Virtual USB could not be detached"), !succeeded);
+            if (resetPending) {
+                restartCalculator();
+            }
+            update();
+        }
+    }
+
+    void restartCalculator() {
+        resetPending = false;
+        restarting = true;
+        usbPoll.stop();
+        ledPoll.stop();
+        ledQueryPending = false;
+        if (monitor.state() == QAbstractSocket::ConnectedState) {
+            sendCommand(QStringLiteral("runMacro $persistStorage"));
+            sendCommand(QStringLiteral("quit"));
+        } else if (renode.state() != QProcess::NotRunning) {
+            renode.terminate();
+        } else {
+            restarting = false;
+            startRenode();
+        }
+    }
+
+    void stopUsb() {
+        usbPoll.stop();
+        if (usbState == UsbState::Connected && vhciPort >= 0) {
+            usbState = UsbState::Detaching;
+            setStatus(QStringLiteral("Disconnecting virtual USB…"), false);
+            runUsbCommand(true, usbipPath,
+                          {QStringLiteral("detach"), QStringLiteral("-p"), QString::number(vhciPort)});
+            return;
+        }
+        if (usbCommand.state() != QProcess::NotRunning) {
+            usbCommand.kill();
+        }
+        writeUsbControl(0);
+        usbState = UsbState::Off;
+        vhciPort = -1;
+        setStatus(QString(), false);
+        update();
+    }
+
+    void usbFailure(const QString &message) {
+        usbPoll.stop();
+        writeUsbControl(0);
+        usbState = UsbState::Failed;
+        vhciPort = -1;
+        setStatus(message, true);
+        if (resetPending) {
+            restartCalculator();
+        }
     }
 
     void startRenode() {
@@ -917,31 +1308,9 @@ private:
         renode.setWorkingDirectory(rootPath);
         renode.setStandardOutputFile(QProcess::nullDevice());
         renode.setStandardErrorFile(QProcess::nullDevice());
-        connect(&renode, &QProcess::errorOccurred, this, [this] {
-            setStatus(QStringLiteral("Renode failed to start\nCheck the RENODE command"), true);
-        });
-        connect(&renode, &QProcess::finished, this, [this] {
-            if (!closing) {
-                setStatus(QStringLiteral("Renode stopped"), true);
-            }
-        });
         renode.start(qEnvironmentVariable("RENODE", "renode"),
                      {QStringLiteral("--disable-xwt"), QStringLiteral("--hide-monitor"),
                       QStringLiteral("-P"), QString::number(port)});
-
-        connect(&connector, &QTimer::timeout, this, [this] {
-            if (monitor.state() == QAbstractSocket::UnconnectedState) {
-                monitor.connectToHost(QHostAddress::LocalHost, port);
-            }
-        });
-        connect(&monitor, &QTcpSocket::connected, this, [this] {
-            connector.stop();
-            QTimer::singleShot(300, this, [this] {
-                sendCommand(QStringLiteral("include @emulator/run.resc"));
-                setStatus(QStringLiteral("Waiting for the LCD…"), false);
-                ledPoll.start(100);
-            });
-        });
         connector.start(100);
     }
 

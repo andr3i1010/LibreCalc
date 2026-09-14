@@ -22,7 +22,7 @@ KERNEL_DFU := $(BUILD)/librecalc-kernel.dfu
 FIRMWARE_DFU := $(BUILD)/librecalc.dfu
 STATE := emulator/state
 
-.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-panel
+.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-panel test-usb
 
 all: bootloader kernel
 	$(PYTHON) tools/dfuse.py pack $(FIRMWARE_DFU) \
@@ -35,6 +35,7 @@ help:
 	@echo 'make flash-virtual IMAGE=x   write a DfuSe into Renode virtual flash'
 	@echo 'make run-panel               start the local calculator window'
 	@echo 'make test-panel              check and render the calculator window'
+	@echo 'make test-usb                check an attached virtual calculator with PyUSB'
 	@echo 'make clean                   remove generated files'
 
 $(BUILD):
