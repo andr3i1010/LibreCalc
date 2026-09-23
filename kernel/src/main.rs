@@ -3,19 +3,30 @@
 #![no_main]
 #![no_std]
 
-use core::panic::PanicInfo;
+use core::{fmt::Write, panic::PanicInfo};
 use cortex_m_rt::entry;
-use n0120_hardware::Board;
+use embedded_graphics::{
+    pixelcolor::Rgb565,
+    prelude::{DrawTarget, Point, RgbColor, Size},
+    primitives::{Rectangle},
+};
+use n0120_hardware::{Backlight, Board, Console};
 
 #[entry]
 fn main() -> ! {
     let mut board = Board::take().unwrap();
 
     board.display.initialize();
-    board.display.fill_rgb565(0x0000); // Black
-    board.display.fill_rect(20, 20, 80, 200, 0xF800); // Red
-    board.display.fill_rect(120, 20, 80, 200, 0x07E0); // Green
-    board.display.fill_rect(220, 20, 80, 200, 0x001F); // Blue
+    board.backlight.set_level(Backlight::MAX_LEVEL);
+
+    board.display.clear(Rgb565::BLACK).unwrap();
+    let mut console = Console::new(
+        Rectangle::new(Point::new(0, 0), Size::new(320, 156)),
+        Rgb565::WHITE,
+        Rgb565::BLACK,
+    );
+    let mut writer = console.writer(&mut board.display);
+    writeln!(writer, "LibreCalc kernel OK!").unwrap();
 
     loop {
         cortex_m::asm::wfi();

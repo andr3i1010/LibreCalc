@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use core::ptr::{read_volatile, write_volatile};
+use core::{
+    convert::Infallible,
+    ptr::{read_volatile, write_volatile},
+};
+use embedded_graphics::{
+    pixelcolor::Rgb565,
+    prelude::{DrawTarget, IntoStorage, OriginDimensions, Pixel, Point, PointsIter, Size},
+    primitives::Rectangle,
+};
 use stm32h7::stm32h725;
 
 const COMMAND_ADDRESS: usize = 0x6000_0000;
@@ -10,9 +18,11 @@ const GPIOB: usize = 0x5802_0400;
 const GPIOC: usize = 0x5802_0800;
 const GPIOD: usize = 0x5802_0C00;
 const GPIOE: usize = 0x5802_1000;
-const DELAY_CPU_HZ: u32 = 550_000_000;
-const WIDTH: u16 = 320;
-const HEIGHT: u16 = 240;
+pub(crate) const CPU_HZ: u32 = 550_000_000;
+pub const WIDTH: u16 = 320;
+pub const HEIGHT: u16 = 240;
+
+const DISPLAY_AREA: Rectangle = Rectangle::new(Point::zero(), Size::new(320, 240));
 
 // N0120 LCD bus pins as (GPIO port, pin, alternate function).
 const FMC_PINS: [(usize, u32, u32); 20] = [
@@ -50,6 +60,21 @@ impl Display {
     pub fn initialize(&mut self) {
         let rcc = unsafe { &*stm32h725::RCC::ptr() };
         let fmc = unsafe { &*stm32h725::FMC::ptr() };
+        let mpu = unsafe { &*cortex_m::peripheral::MPU::PTR };
+
+        // FMC LCD command/data writes must be ordered device accesses.
+        // Match the stock 256 MiB region: execute-never, privileged RW, TEX=2.
+        cortex_m::asm::dsb();
+        unsafe {
+            mpu.ctrl.write(0);
+            mpu.rnr.write(0);
+            mpu.rbar.write(0x6000_0000);
+            mpu.rasr
+                .write((1 << 28) | (1 << 24) | (2 << 19) | (27 << 1) | 1);
+            mpu.ctrl.write(5); // Enable MPU with the privileged default map.
+        }
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         rcc.ahb4enr().modify(|_, w| {
             w.gpioaen()
@@ -121,32 +146,20 @@ impl Display {
         delay_ms(20);
     }
 
-    pub fn fill_rgb565(&mut self, color: u16) {
-        self.fill_rect(0, 0, WIDTH, HEIGHT, color);
-    }
-
-    pub fn fill_rect(&mut self, x: u16, y: u16, width: u16, height: u16, color: u16) {
-        let x_end = x.saturating_add(width).min(WIDTH);
-        let y_end = y.saturating_add(height).min(HEIGHT);
-        if x >= x_end || y >= y_end {
-            return;
-        }
-
+    fn start_memory_write(&mut self, x: u16, y: u16, width: u16, height: u16) {
+        let x_end = x + width - 1;
+        let y_end = y + height - 1;
         self.write_command(0x2A); // Column range
-        for value in [x >> 8, x & 0xFF, (x_end - 1) >> 8, (x_end - 1) & 0xFF] {
+        for value in [x >> 8, x & 0xFF, x_end >> 8, x_end & 0xFF] {
             self.write_data(value);
         }
 
         self.write_command(0x2B); // Row range
-        for value in [y >> 8, y & 0xFF, (y_end - 1) >> 8, (y_end - 1) & 0xFF] {
+        for value in [y >> 8, y & 0xFF, y_end >> 8, y_end & 0xFF] {
             self.write_data(value);
         }
 
         self.write_command(0x2C); // Pixel data
-
-        for _ in 0..u32::from(x_end - x) * u32::from(y_end - y) {
-            self.write_data(color);
-        }
     }
 
     fn write_command(&mut self, command: u8) {
@@ -162,7 +175,72 @@ impl Display {
     }
 }
 
-fn set_field(base: usize, offset: usize, shift: u32, width: u32, value: u32) {
+impl OriginDimensions for Display {
+    fn size(&self) -> Size {
+        DISPLAY_AREA.size
+    }
+}
+
+impl DrawTarget for Display {
+    type Color = Rgb565;
+    type Error = Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(point, color) in pixels {
+            if DISPLAY_AREA.contains(point) {
+                self.start_memory_write(point.x as u16, point.y as u16, 1, 1);
+                self.write_data(color.into_storage());
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let visible = area.intersection(&DISPLAY_AREA);
+        if visible.size.width == 0 || visible.size.height == 0 {
+            return Ok(());
+        }
+
+        self.start_memory_write(
+            visible.top_left.x as u16,
+            visible.top_left.y as u16,
+            visible.size.width as u16,
+            visible.size.height as u16,
+        );
+        for (point, color) in area.points().zip(colors) {
+            if visible.contains(point) {
+                self.write_data(color.into_storage());
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let visible = area.intersection(&DISPLAY_AREA);
+        if visible.size.width == 0 || visible.size.height == 0 {
+            return Ok(());
+        }
+
+        self.start_memory_write(
+            visible.top_left.x as u16,
+            visible.top_left.y as u16,
+            visible.size.width as u16,
+            visible.size.height as u16,
+        );
+        for _ in 0..visible.size.width * visible.size.height {
+            self.write_data(color.into_storage());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn set_field(base: usize, offset: usize, shift: u32, width: u32, value: u32) {
     let register = (base + offset) as *mut u32;
     let mask = ((1 << width) - 1) << shift;
     unsafe {
@@ -173,6 +251,10 @@ fn set_field(base: usize, offset: usize, shift: u32, width: u32, value: u32) {
     }
 }
 
+pub(crate) fn delay_us(microseconds: u32) {
+    cortex_m::asm::delay((CPU_HZ / 1_000_000).saturating_mul(microseconds));
+}
+
 fn delay_ms(milliseconds: u32) {
-    cortex_m::asm::delay((DELAY_CPU_HZ / 1_000).saturating_mul(milliseconds));
+    delay_us(milliseconds.saturating_mul(1_000));
 }
