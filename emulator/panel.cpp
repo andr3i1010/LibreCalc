@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRadialGradient>
 #include <QRegularExpression>
 #include <QSet>
@@ -25,17 +26,25 @@
 #include <QWidget>
 
 #include <array>
+#include <atomic>
+#include <cstring>
 #include <iostream>
 
 namespace {
 
 constexpr qreal CanvasWidth = 1130.0;
 constexpr qreal CanvasHeight = 2340.0;
+constexpr int LcdWidth = 320;
+constexpr int LcdHeight = 240;
+constexpr int LcdHeaderSize = 64;
+constexpr int LcdFrameSize = LcdWidth * LcdHeight * 3;
+constexpr qint64 LcdSharedMemorySize = LcdHeaderSize + 2 * LcdFrameSize;
+constexpr quint32 LcdSharedMemoryMagic = 0x444C434C;
 const QRectF ScreenRect(167.0, 173.0, 796.0, 597.0);
-const QRectF UsbRect(305.0, 2228.0, 82.0, 82.0);
-const QRectF ScreenshotRect(451.0, 2228.0, 82.0, 82.0);
-const QRectF FullscreenRect(597.0, 2228.0, 82.0, 82.0);
-const QRectF ResetRect(743.0, 2228.0, 82.0, 82.0);
+const std::array<QRectF, 4> Utilities = {{
+    {305, 2228, 82, 82}, {451, 2228, 82, 82},
+    {597, 2228, 82, 82}, {743, 2228, 82, 82},
+}};
 
 enum class KeyStyle { Dpad, Round, Home, Power, Small, Large };
 
@@ -101,8 +110,6 @@ const std::array<KeyDefinition, 46> Keys = {{
     {"Ans", "Ans", "", "", {675, 2003, 153, 98}, KeyStyle::Large},
     {"Equals", "EXE", "", "", {862, 2003, 153, 98}, KeyStyle::Large},
 }};
-
-static_assert(Keys.size() == 46);
 
 int keyIndex(const QString &name) {
     for (size_t i = 0; i < Keys.size(); ++i) {
@@ -226,8 +233,19 @@ public:
         resize(520, 1040);
 
         rootPath = qEnvironmentVariable("LIBRECALC_ROOT", QDir::currentPath());
-        display = QImage(320, 240, QImage::Format_RGB32);
+        display = QImage(LcdWidth, LcdHeight, QImage::Format_RGB32);
         display.fill(QColor("#f5f7f8"));
+
+        lcdSharedMemoryPath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) +
+                              QStringLiteral("/librecalc-lcd-%1").arg(QCoreApplication::applicationPid());
+        lcdSharedMemory.setFileName(lcdSharedMemoryPath);
+        if (lcdSharedMemory.open(QIODevice::ReadWrite | QIODevice::Truncate) &&
+            lcdSharedMemory.resize(LcdSharedMemorySize)) {
+            lcdSharedData = lcdSharedMemory.map(0, LcdSharedMemorySize);
+        }
+        if (lcdSharedData) {
+            std::memset(lcdSharedData, 0, LcdSharedMemorySize);
+        }
 
         connect(&screenRefresh, &QTimer::timeout, this, [this] { refreshScreen(); });
         connect(&ledPoll, &QTimer::timeout, this, [this] {
@@ -342,9 +360,11 @@ public:
             });
         });
 
-        if (startEmulator) {
+        if (startEmulator && lcdSharedData) {
             screenRefresh.start(16);
             startRenode();
+        } else if (startEmulator) {
+            setStatus(QStringLiteral("Could not create the shared LCD framebuffer"), true);
         }
     }
 
@@ -364,9 +384,34 @@ public:
             renode.kill();
             renode.waitForFinished(1000);
         }
+        if (lcdSharedData) {
+            lcdSharedMemory.unmap(lcdSharedData);
+        }
+        lcdSharedMemory.close();
+        QFile::remove(lcdSharedMemoryPath);
     }
 
     bool selfTest(QString *failure) {
+        if (!lcdSharedData) {
+            *failure = QStringLiteral("shared LCD framebuffer setup failed");
+            return false;
+        }
+        auto *lcdHeader = reinterpret_cast<quint32 *>(lcdSharedData);
+        auto *lcdPixels = lcdSharedData + LcdHeaderSize;
+        lcdHeader[0] = LcdSharedMemoryMagic;
+        lcdHeader[1] = LcdWidth;
+        lcdHeader[2] = LcdHeight;
+        lcdHeader[3] = 0;
+        lcdPixels[0] = 0x12;
+        lcdPixels[1] = 0x34;
+        lcdPixels[2] = 0x56;
+        lcdHeader[4] = 1;
+        refreshScreen();
+        if (display.pixelColor(0, 0) != QColor(0x12, 0x34, 0x56) || lcdHeader[5] != 1) {
+            *failure = QStringLiteral("shared LCD framebuffer refresh failed");
+            return false;
+        }
+
         QSet<QString> names;
         for (size_t i = 0; i < Keys.size(); ++i) {
             const QString name = QLatin1String(Keys[i].name);
@@ -380,11 +425,12 @@ public:
             *failure = QStringLiteral("key count or LCD aspect ratio failed");
             return false;
         }
-        if (utilityAt(UsbRect.center()) != 0 || utilityAt(ScreenshotRect.center()) != 1 ||
-            utilityAt(FullscreenRect.center()) != 2 ||
-            utilityAt(ResetRect.center()) != 3 || hitKey(ResetRect.center()) != -1) {
-            *failure = QStringLiteral("utility hit testing failed");
-            return false;
+        for (size_t i = 0; i < Utilities.size(); ++i) {
+            if (utilityAt(Utilities[i].center()) != static_cast<int>(i) ||
+                hitKey(Utilities[i].center()) != -1) {
+                *failure = QStringLiteral("utility hit testing failed");
+                return false;
+            }
         }
         for (const QSize size : {QSize(360, 700), QSize(800, 600), QSize(1920, 1080)}) {
             resize(size);
@@ -398,6 +444,17 @@ public:
             keyIndexForQt(Qt::Key_Space) != keyIndex("OK") ||
             keyIndexForQt(Qt::Key_A) != -1) {
             *failure = QStringLiteral("physical keyboard mapping failed");
+            return false;
+        }
+
+        const int key = keyIndex("6");
+        pressKey(key);
+        pressKey(key);
+        releaseKey(key);
+        const bool stillHeld = held.value(key) == 1;
+        releaseKey(key);
+        if (!stillHeld || held.contains(key)) {
+            *failure = QStringLiteral("overlapping key presses failed");
             return false;
         }
 
@@ -552,10 +609,9 @@ protected:
             drawKey(painter, static_cast<int>(i));
         }
 
-        drawUtility(painter, UsbRect, 0, utilityDown == 0, utilityHover == 0);
-        drawUtility(painter, ScreenshotRect, 1, utilityDown == 1, utilityHover == 1);
-        drawUtility(painter, FullscreenRect, 2, utilityDown == 2, utilityHover == 2);
-        drawUtility(painter, ResetRect, 3, utilityDown == 3, utilityHover == 3);
+        for (size_t i = 0; i < Utilities.size(); ++i) {
+            drawUtility(painter, static_cast<int>(i));
+        }
     }
 
     void mousePressEvent(QMouseEvent *event) override {
@@ -682,26 +738,17 @@ protected:
             auto *touch = static_cast<QTouchEvent *>(event);
             for (const QEventPoint &point : touch->points()) {
                 const int id = point.id();
-                if (point.state() == QEventPoint::State::Pressed) {
-                    const int index = hitKey(toCanvas(point.position()));
-                    if (index >= 0) {
-                        touchKeys[id] = index;
-                        pressKey(index);
-                    }
-                } else if (point.state() == QEventPoint::State::Updated) {
-                    const int next = hitKey(toCanvas(point.position()));
-                    const int previous = touchKeys.value(id, -1);
-                    if (next != previous) {
-                        releaseKey(previous);
-                        touchKeys.remove(id);
-                        if (next >= 0) {
-                            touchKeys[id] = next;
-                            pressKey(next);
-                        }
-                    }
-                } else if (point.state() == QEventPoint::State::Released) {
-                    if (touchKeys.contains(id)) {
-                        releaseKey(touchKeys.take(id));
+                if (point.state() == QEventPoint::State::Stationary) {
+                    continue;
+                }
+                const int next = point.state() == QEventPoint::State::Released
+                                     ? -1 : hitKey(toCanvas(point.position()));
+                if (next != touchKeys.value(id, -1)) {
+                    releaseKey(touchKeys.value(id, -1));
+                    touchKeys.remove(id);
+                    if (next >= 0) {
+                        touchKeys[id] = next;
+                        pressKey(next);
                     }
                 }
             }
@@ -722,7 +769,7 @@ protected:
     }
 
 private:
-    enum class UsbState { Off, Waiting, Exporting, LoadingModule, Attaching, FindingPort, Connected, Detaching, Failed };
+    enum class UsbState { Off, Waiting, LoadingModule, Attaching, FindingPort, Connected, Detaching, Failed };
 
     QProcess renode;
     QProcess usbCommand;
@@ -731,6 +778,7 @@ private:
     QTimer screenRefresh;
     QTimer ledPoll;
     QTimer usbPoll;
+    QFile lcdSharedMemory;
     QImage display;
     QColor ledColor = Qt::black;
     QByteArray monitorBuffer;
@@ -738,12 +786,14 @@ private:
     QHash<int, int> keyboardKeys;
     QHash<int, int> touchKeys;
     QString rootPath;
+    QString lcdSharedMemoryPath;
     QString statusText = QStringLiteral("Starting calculator…");
     QString usbipPath;
     QString pkexecPath;
     QString modprobePath;
     quint16 port = 0;
-    qint64 screenTimestamp = -1;
+    uchar *lcdSharedData = nullptr;
+    quint32 screenSequence = 0;
     int mouseKey = -1;
     int utilityDown = -1;
     int utilityHover = -1;
@@ -787,17 +837,10 @@ private:
     }
 
     static int utilityAt(const QPointF &point) {
-        if (UsbRect.contains(point)) {
-            return 0;
-        }
-        if (ScreenshotRect.contains(point)) {
-            return 1;
-        }
-        if (FullscreenRect.contains(point)) {
-            return 2;
-        }
-        if (ResetRect.contains(point)) {
-            return 3;
+        for (size_t i = 0; i < Utilities.size(); ++i) {
+            if (Utilities[i].contains(point)) {
+                return static_cast<int>(i);
+            }
         }
         return -1;
     }
@@ -829,17 +872,9 @@ private:
                                  key.style == KeyStyle::Small ? 34 : 43);
         }
 
-        QPainterPath shadow;
-        const QRectF shadowRect = key.rect.translated(0, pressed ? 7 : 10);
-        if (key.style == KeyStyle::Round) {
-            shadow.addEllipse(shadowRect);
-        } else {
-            shadow.addRoundedRect(shadowRect, key.style == KeyStyle::Small ? 34 : 43,
-                                  key.style == KeyStyle::Small ? 34 : 43);
-        }
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(0, 0, 0, pressed ? 32 : 55));
-        painter.drawPath(shadow);
+        painter.drawPath(shape.translated(0, pressed ? 2 : 10));
 
         QColor top("#ffffff");
         QColor bottom(pressed ? "#d7d8d6" : "#e9e9e7");
@@ -943,7 +978,10 @@ private:
         painter.restore();
     }
 
-    void drawUtility(QPainter &painter, const QRectF &button, int action, bool down, bool hover) const {
+    void drawUtility(QPainter &painter, int action) const {
+        const QRectF &button = Utilities[action];
+        const bool down = utilityDown == action;
+        const bool hover = utilityHover == action;
         const QRectF drawn = button.translated(0, down ? 4 : 0);
         painter.setPen(QPen(QColor("#757b7f"), 2));
         painter.setBrush(usbState == UsbState::Connected && action == 0 ? QColor("#d7ebf4")
@@ -999,9 +1037,7 @@ private:
         if (index < 0) {
             return;
         }
-        const int count = held.value(index, 0);
-        held[index] = count + 1;
-        if (count == 0) {
+        if (++held[index] == 1) {
             sendCommand(QStringLiteral("gpioPortA.n0120Keypad Press \"%1\"")
                             .arg(QLatin1String(Keys[index].name)));
         }
@@ -1012,10 +1048,7 @@ private:
         if (index < 0 || !held.contains(index)) {
             return;
         }
-        const int count = held.value(index) - 1;
-        if (count > 0) {
-            held[index] = count;
-        } else {
+        if (--held[index] == 0) {
             held.remove(index);
             sendCommand(QStringLiteral("gpioPortA.n0120Keypad Release \"%1\"")
                             .arg(QLatin1String(Keys[index].name)));
@@ -1079,25 +1112,37 @@ private:
     }
 
     void refreshScreen() {
-        const QString path = rootPath + QStringLiteral("/emulator/state/lcd.ppm");
-        const QFileInfo info(path);
-        if (!info.exists()) {
+        if (!lcdSharedData) {
             return;
         }
-        const qint64 modified = info.lastModified().toMSecsSinceEpoch();
-        if (modified == screenTimestamp) {
+        auto *header = reinterpret_cast<volatile quint32 *>(lcdSharedData);
+        const quint32 sequence = header[4];
+        if (header[0] != LcdSharedMemoryMagic || header[1] != LcdWidth || header[2] != LcdHeight ||
+            sequence == 0 || sequence == screenSequence) {
             return;
         }
-        QImage next(path);
-        if (next.size() == QSize(320, 240)) {
-            display = next.convertToFormat(QImage::Format_RGB32);
-            screenTimestamp = modified;
-            hasDisplay = true;
-            if (!statusIsError && usbState == UsbState::Off) {
-                statusText.clear();
-            }
-            update();
+        std::atomic_thread_fence(std::memory_order_acquire);
+        const quint32 activeBuffer = header[3];
+        if (activeBuffer > 1) {
+            return;
         }
+        const uchar *pixels = lcdSharedData + LcdHeaderSize + activeBuffer * LcdFrameSize;
+        const QImage next(pixels,
+                          LcdWidth, LcdHeight, LcdWidth * 3, QImage::Format_RGB888);
+        const QImage copy = next.copy();
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (header[4] != sequence) {
+            return;
+        }
+        display = copy;
+        screenSequence = sequence;
+        std::atomic_thread_fence(std::memory_order_release);
+        header[5] = sequence;
+        hasDisplay = true;
+        if (!statusIsError && usbState == UsbState::Off) {
+            statusText.clear();
+        }
+        update();
     }
 
     void setStatus(const QString &message, bool error) {
@@ -1146,37 +1191,21 @@ private:
 
     void handleUsbStatus(quint32 status) {
         const bool ready = status & 2;
-        const bool exported = status & 4;
-        if (status & 8) {
-            usbFailure(QStringLiteral("Virtual USB could not start (TCP port 3240 is busy)"));
-            return;
-        }
         if (usbState == UsbState::Waiting && ready) {
-            usbState = UsbState::Exporting;
-            setStatus(QStringLiteral("Starting virtual USB…"), false);
-            writeUsbControl(3);
-        } else if (usbState == UsbState::Exporting && exported) {
             usbState = UsbState::LoadingModule;
             if (QFileInfo::exists(QStringLiteral("/sys/module/vhci_hcd"))) {
                 finishUsbCommand(true);
             } else {
                 setStatus(QStringLiteral("Authorizing USB host access…"), false);
-                runUsbCommand(true, modprobePath, {QStringLiteral("vhci_hcd")});
+                runUsbCommand(modprobePath, {QStringLiteral("vhci_hcd")});
             }
-        } else if (usbState == UsbState::Connected && !exported) {
-            usbFailure(QStringLiteral("Virtual USB disconnected"));
-            return;
         }
         update();
     }
 
-    void runUsbCommand(bool privileged, const QString &program, QStringList arguments) {
-        if (privileged) {
-            arguments.prepend(program);
-            usbCommand.start(pkexecPath, arguments);
-        } else {
-            usbCommand.start(program, arguments);
-        }
+    void runUsbCommand(const QString &program, QStringList arguments) {
+        arguments.prepend(program);
+        usbCommand.start(pkexecPath, arguments);
     }
 
     static QSet<int> usedVhciPorts() {
@@ -1186,9 +1215,7 @@ private:
 
     void findVhciPort() {
         QSet<int> ports = usedVhciPorts();
-        for (int port : vhciPortsBefore) {
-            ports.remove(port);
-        }
+        ports.subtract(vhciPortsBefore);
         if (!ports.isEmpty()) {
             vhciPort = *ports.constBegin();
             usbState = UsbState::Connected;
@@ -1216,7 +1243,7 @@ private:
             vhciPortAttempts = 0;
             usbState = UsbState::Attaching;
             setStatus(QStringLiteral("Connecting virtual USB…"), false);
-            runUsbCommand(true, usbipPath,
+            runUsbCommand(usbipPath,
                           {QStringLiteral("attach"), QStringLiteral("-r"), QStringLiteral("127.0.0.1"),
                            QStringLiteral("-b"), QStringLiteral("1-0")});
             return;
@@ -1265,7 +1292,7 @@ private:
         if (usbState == UsbState::Connected && vhciPort >= 0) {
             usbState = UsbState::Detaching;
             setStatus(QStringLiteral("Disconnecting virtual USB…"), false);
-            runUsbCommand(true, usbipPath,
+            runUsbCommand(usbipPath,
                           {QStringLiteral("detach"), QStringLiteral("-p"), QString::number(vhciPort)});
             return;
         }
@@ -1293,7 +1320,7 @@ private:
     void startRenode() {
         if (!QFileInfo::exists(rootPath + QStringLiteral("/emulator/state/internal.bin")) ||
             !QFileInfo::exists(rootPath + QStringLiteral("/emulator/state/external.bin"))) {
-            setStatus(QStringLiteral("Flash virtual storage first\n\nmake flash-virtual IMAGE=firmware.dfu"), true);
+            setStatus(QStringLiteral("Flash virtual storage first\n\nmake flash-virtual"), true);
             return;
         }
 
@@ -1305,6 +1332,11 @@ private:
         port = probe.serverPort();
         probe.close();
 
+        std::memset(lcdSharedData, 0, LcdSharedMemorySize);
+        screenSequence = 0;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("LIBRECALC_LCD_SHM"), lcdSharedMemoryPath);
+        renode.setProcessEnvironment(environment);
         renode.setWorkingDirectory(rootPath);
         renode.setStandardOutputFile(QProcess::nullDevice());
         renode.setStandardErrorFile(QProcess::nullDevice());

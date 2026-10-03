@@ -2,11 +2,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.IO;
-using System.Text;
+using System.IO.MemoryMappedFiles;
+using System.Threading;
 using Antmicro.Renode.Core;
-using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Time;
 
@@ -19,16 +18,18 @@ namespace Antmicro.Renode.Peripherals
         public N0120Lcd(Machine machine)
         {
             this.machine = machine;
-            var connections = new Dictionary<int, IGPIO> { [0] = new GPIO() };
-            Connections = new ReadOnlyDictionary<int, IGPIO>(connections);
+            Connections = new Dictionary<int, IGPIO> { [0] = new GPIO() };
 
-            var root = Environment.GetEnvironmentVariable("LIBRECALC_ROOT");
-            var state = root == null ? "/tmp" : Path.Combine(root, "emulator", "state");
-            Directory.CreateDirectory(state);
-            ppmPath = Path.Combine(state, "lcd.ppm");
-            ppmTemporaryPath = ppmPath + ".tmp";
-            busLog = new StreamWriter(Path.Combine(state, "lcd-bus.log"), false);
-            busLog.WriteLine("# N0120 LCD bus capture");
+            var sharedPath = Environment.GetEnvironmentVariable("LIBRECALC_LCD_SHM");
+            if(!string.IsNullOrEmpty(sharedPath))
+            {
+                sharedMemory = MemoryMappedFile.CreateFromFile(sharedPath, FileMode.Open, null,
+                    SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
+                sharedView = sharedMemory.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
+                sharedView.Write(0, 0x444C434Cu);
+                sharedView.Write(4, (uint)Width);
+                sharedView.Write(8, (uint)Height);
+            }
 
             Reset();
         }
@@ -37,10 +38,8 @@ namespace Antmicro.Renode.Peripherals
         {
             ResetController();
             Array.Clear(framebuffer, 0, framebuffer.Length);
-            if(File.Exists(ppmPath))
-            {
-                File.Delete(ppmPath);
-            }
+            framebufferDirty = true;
+            PublishFrame();
         }
 
         public ushort ReadWord(long offset)
@@ -49,7 +48,7 @@ namespace Antmicro.Renode.Peripherals
             {
                 return 0;
             }
-            if(command == ReadDisplayId)
+            if(command == 0x04) // Read display ID
             {
                 return displayId[readIndex++ % displayId.Length];
             }
@@ -60,46 +59,38 @@ namespace Antmicro.Renode.Peripherals
                     return 0;
                 }
 
-                var displayX = x;
-                var displayY = y;
-                if((madctl & MemoryVerticalAddressing) == 0)
-                {
-                    displayX = Width - 1 - y;
-                    displayY = x;
-                }
+                var (displayX, displayY) = DisplayPosition;
                 var pixel = 3 * (displayY * Width + displayX);
-                var red = (framebuffer[pixel] * 31 + 127) / 255;
-                var green = (framebuffer[pixel + 1] * 63 + 127) / 255;
-                var blue = (framebuffer[pixel + 2] * 31 + 127) / 255;
                 AdvanceCursor();
-                return (ushort)(red << 11 | green << 5 | blue);
+                return (ushort)((framebuffer[pixel] * 31 + 127) / 255 << 11
+                    | (framebuffer[pixel + 1] * 63 + 127) / 255 << 5
+                    | (framebuffer[pixel + 2] * 31 + 127) / 255);
             }
             return 0;
         }
 
         public void WriteWord(long offset, ushort value)
         {
-            if(offset == CommandOffset)
+            if(offset == 0)
             {
                 command = (byte)value;
                 parameters = 0;
                 readIndex = 0;
-                busLog.WriteLine("C 2 0x{0:X4}", value & 0xFFFF);
-                if(command == SoftwareReset)
+                if(command == 0x01) // Software reset
                 {
                     ResetController();
                 }
-                else if(command == SleepIn)
+                else if(command == 0x10) // Sleep in
                 {
                     sleeping = true;
                     UpdateTearingEffect();
                 }
-                else if(command == SleepOut)
+                else if(command == 0x11) // Sleep out
                 {
                     sleeping = false;
                     UpdateTearingEffect();
                 }
-                else if(command == TearingEffectOff)
+                else if(command == 0x34) // Tearing effect off
                 {
                     tearingEffectEnabled = false;
                     if(framebufferDirty)
@@ -108,12 +99,7 @@ namespace Antmicro.Renode.Peripherals
                     }
                     UpdateTearingEffect();
                 }
-                else if(command == MemoryWrite)
-                {
-                    x = xStart;
-                    y = yStart;
-                }
-                else if(command == MemoryRead)
+                else if(command == MemoryWrite || command == MemoryRead)
                 {
                     x = xStart;
                     y = yStart;
@@ -125,11 +111,9 @@ namespace Antmicro.Renode.Peripherals
                 return;
             }
 
-            var data = (ushort)value;
-            if(command == ColumnAddressSet || command == RowAddressSet)
+            if(command == ColumnAddressSet || command == 0x2B) // Row address set
             {
-                windowParameters[parameters++] = (byte)data;
-                busLog.WriteLine("D 0x{0:X4}", data);
+                windowParameters[parameters++] = (byte)value;
                 if(parameters == windowParameters.Length)
                 {
                     var first = windowParameters[0] << 8 | windowParameters[1];
@@ -144,31 +128,35 @@ namespace Antmicro.Renode.Peripherals
                         yStart = first;
                         yEnd = last;
                     }
-                    busLog.WriteLine("W {0} {1}..{2}", command == ColumnAddressSet ? "X" : "Y", first, last);
                     parameters = 0;
                 }
             }
-            else if(command == MemoryAccessControl)
+            else if(command == 0x36) // Memory access control
             {
-                madctl = (byte)data;
-                busLog.WriteLine("D MADCTL 0x{0:X2}", madctl);
+                madctl = (byte)value;
             }
-            else if(command == TearingEffectOn)
+            else if(command == 0x35) // Tearing effect on
             {
                 tearingEffectEnabled = true;
                 UpdateTearingEffect();
             }
-            else if(command == FrameRateControl)
+            else if(command == 0xC6) // Frame rate control
             {
-                framePeriodMicroseconds = 1000000 / FrameRate((byte)(data & 0x1F));
-                if(tearingEffectEnabled && !sleeping)
-                {
-                    UpdateTearingEffect();
-                }
+                framePeriodMicroseconds = 1000000 / frameRates[value & 0x1F];
+                UpdateTearingEffect();
             }
             else if(command == MemoryWrite)
             {
-                WritePixel(data);
+                var (displayX, displayY) = DisplayPosition;
+                if(displayX >= 0 && displayX < Width && displayY >= 0 && displayY < Height)
+                {
+                    var pixel = 3 * (displayY * Width + displayX);
+                    framebuffer[pixel] = (byte)(((value >> 11) & 0x1F) * 255 / 31);
+                    framebuffer[pixel + 1] = (byte)(((value >> 5) & 0x3F) * 255 / 63);
+                    framebuffer[pixel + 2] = (byte)((value & 0x1F) * 255 / 31);
+                    framebufferDirty = true;
+                }
+                AdvanceCursor();
             }
         }
 
@@ -176,86 +164,50 @@ namespace Antmicro.Renode.Peripherals
 
         public long Size => DataOffset + 2;
 
+        private (int x, int y) DisplayPosition => (madctl & 0x20) == 0 ? (Width - 1 - y, x) : (x, y);
+
         private void ResetController()
         {
             command = 0;
-            parameters = 0;
-            xStart = 0;
+            parameters = xStart = yStart = x = y = 0;
             xEnd = Width - 1;
-            yStart = 0;
             yEnd = Height - 1;
-            x = 0;
-            y = 0;
-            sleeping = false;
-            tearingEffectEnabled = false;
+            sleeping = tearingEffectEnabled = false;
             madctl = 0;
-            pulseActive = false;
-            framePeriodMicroseconds = 1000000 / DefaultFrameRate;
-            tearGeneration++;
+            framePeriodMicroseconds = 1000000 / 60;
             Connections[0].Unset();
+            UpdateTearingEffect();
         }
 
         private void UpdateTearingEffect()
         {
-            var enabled = tearingEffectEnabled && !sleeping;
-            tearGeneration++;
-            if(enabled)
+            if(!tearingEffectEnabled || sleeping)
             {
-                ScheduleTearFrame(tearGeneration);
+                Connections[0].Unset();
             }
-            else
-            {
-                EndTearPulse();
-            }
+            ScheduleFrame(++tearGeneration);
         }
 
-        private void ScheduleTearFrame(uint generation)
+        private void ScheduleFrame(uint generation)
         {
             machine.ScheduleAction(TimeInterval.FromMicroseconds(framePeriodMicroseconds), _ =>
             {
-                if(generation != tearGeneration || !tearingEffectEnabled || sleeping)
+                if(generation != tearGeneration)
                 {
                     return;
                 }
+                // Retry a coalesced frame even after the guest stops drawing.
                 if(framebufferDirty)
                 {
                     PublishFrame();
                 }
-                pulseActive = true;
-                Connections[0].Set(true);
-                ScheduleTearFrame(generation);
-                machine.ScheduleAction(TimeInterval.FromMilliseconds(TearPulseMilliseconds), __ => EndTearPulse(), "LCD TE pulse");
-            }, "LCD TE frame");
-        }
-
-        private void EndTearPulse()
-        {
-            if(pulseActive)
-            {
-                pulseActive = false;
-                Connections[0].Unset();
-            }
-        }
-
-        private void WritePixel(ushort value)
-        {
-            var displayX = x;
-            var displayY = y;
-            if((madctl & MemoryVerticalAddressing) == 0)
-            {
-                displayX = Width - 1 - y;
-                displayY = x;
-            }
-
-            if(displayX >= 0 && displayX < Width && displayY >= 0 && displayY < Height)
-            {
-                var pixel = 3 * (displayY * Width + displayX);
-                framebuffer[pixel] = (byte)(((value >> 11) & 0x1F) * 255 / 31);
-                framebuffer[pixel + 1] = (byte)(((value >> 5) & 0x3F) * 255 / 63);
-                framebuffer[pixel + 2] = (byte)((value & 0x1F) * 255 / 31);
-                framebufferDirty = true;
-            }
-            AdvanceCursor();
+                if(tearingEffectEnabled && !sleeping)
+                {
+                    Connections[0].Set(true);
+                    machine.ScheduleAction(TimeInterval.FromMilliseconds(1), __ => Connections[0].Unset(), "LCD TE pulse");
+                }
+                ScheduleFrame(generation);
+            }, "LCD frame");
         }
 
         private void AdvanceCursor()
@@ -282,29 +234,30 @@ namespace Antmicro.Renode.Peripherals
 
         private void PublishFrame()
         {
-            using(var image = new FileStream(ppmTemporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            if(sharedView == null)
             {
-                var header = Encoding.ASCII.GetBytes($"P6\n{Width} {Height}\n255\n");
-                image.Write(header, 0, header.Length);
-                image.Write(framebuffer, 0, framebuffer.Length);
+                framebufferDirty = false;
+                return;
             }
-            if(File.Exists(ppmPath))
+            if(sharedView.ReadUInt32(20) != frameSequence)
             {
-                File.Delete(ppmPath);
+                return;
             }
-            File.Move(ppmTemporaryPath, ppmPath);
+            Thread.MemoryBarrier();
+            var nextBuffer = 1 - activeBuffer;
+            sharedView.WriteArray(HeaderSize + nextBuffer * framebuffer.Length,
+                framebuffer, 0, framebuffer.Length);
+            Thread.MemoryBarrier();
+            activeBuffer = nextBuffer;
+            frameSequence++;
+            sharedView.Write(12, (uint)activeBuffer);
+            sharedView.Write(16, frameSequence);
             framebufferDirty = false;
         }
 
-        private static ulong FrameRate(byte code)
-        {
-            return frameRates[code];
-        }
-
         private readonly Machine machine;
-        private readonly StreamWriter busLog;
-        private readonly string ppmPath;
-        private readonly string ppmTemporaryPath;
+        private readonly MemoryMappedFile sharedMemory = null;
+        private readonly MemoryMappedViewAccessor sharedView = null;
         private readonly byte[] framebuffer = new byte[Width * Height * 3];
         private readonly byte[] windowParameters = new byte[4];
         private readonly ushort[] displayId = { 0, 0x46, 0x01, 0x4e };
@@ -321,30 +274,20 @@ namespace Antmicro.Renode.Peripherals
         private bool tearingEffectEnabled;
         private bool framebufferDirty;
         private byte madctl;
-        private bool pulseActive;
+        private int activeBuffer;
         private uint tearGeneration;
+        private uint frameSequence;
         private ulong framePeriodMicroseconds;
 
         // The stock firmware selects MADCTL=0xA0, exposing the panel as 320x240.
         private const int Width = 320;
         private const int Height = 240;
-        private const long CommandOffset = 0;
+        private const int HeaderSize = 64;
+        private const long SharedMemorySize = HeaderSize + 2 * Width * Height * 3;
         private const long DataOffset = 0x20000;
-        private const byte SoftwareReset = 0x01;
-        private const byte ReadDisplayId = 0x04;
-        private const byte SleepIn = 0x10;
-        private const byte SleepOut = 0x11;
         private const byte MemoryWrite = 0x2C;
         private const byte MemoryRead = 0x2E;
-        private const byte MemoryAccessControl = 0x36;
-        private const byte MemoryVerticalAddressing = 0x20;
-        private const byte TearingEffectOff = 0x34;
-        private const byte TearingEffectOn = 0x35;
         private const byte ColumnAddressSet = 0x2A;
-        private const byte RowAddressSet = 0x2B;
-        private const byte FrameRateControl = 0xC6;
-        private const ulong TearPulseMilliseconds = 1;
-        private const ulong DefaultFrameRate = 60;
 
         private static readonly ulong[] frameRates =
         {

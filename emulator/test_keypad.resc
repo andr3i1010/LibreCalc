@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
+mach create "keypad-test"
+python
+"""
+import os, tempfile
+from System import Environment
+root = tempfile.mkdtemp(prefix='librecalc-keypad-')
+shared = os.path.join(root, 'lcd.shm')
+open(shared, 'wb').write(bytearray(64 + 2 * 320 * 240 * 3))
+Environment.SetEnvironmentVariable('LIBRECALC_ROOT', root)
+Environment.SetEnvironmentVariable('LIBRECALC_LCD_SHM', shared)
+"""
+machine LoadPlatformDescription @emulator/n0120.repl
+sysbus SetHookAfterPeripheralRead syscfg "if offset == 0x20: value = 0x101"
+sysbus Unregister sramBank1
+sysbus Unregister qspi
+sysbus Unregister adc3
+sysbus Unregister adcM1S2
+machine LoadPlatformDescription @emulator/n0120_lcd.repl
+machine LoadPlatformDescription @emulator/n0120_ospi.repl
+machine LoadPlatformDescription @emulator/n0120_adc3.repl
+machine LoadPlatformDescription @emulator/n0120_usb.repl
+machine LoadPlatformDescription @emulator/n0120_adc12.repl
+sysbus LoadELF @build/librecalc-bootloader.elf
+sysbus WriteDoubleWord 0x1FF1E800 0x00230046
+sysbus WriteDoubleWord 0x1FF1E804 0x34335114
+sysbus WriteDoubleWord 0x1FF1E808 0x36333839
+cpu VectorTableOffset 0x08000000
+
+python
+"""
+import shutil, struct
+bus = self.Machine['sysbus']
+keypad = self.Machine['sysbus.gpioPortA.n0120Keypad']
+keys = (
+    ('Left', 'Left'), ('Up', 'Up'), ('Down', 'Down'), ('Right', 'Right'),
+    ('OK', 'OK'), ('Back', 'Back'), ('Home', 'Home'),
+    ('Shift', 'Shift'), ('Alpha', 'Alpha'), ('XNT', 'XNT'), ('Var', 'Var'),
+    ('Toolbox', 'Toolbox'), ('Backspace', 'Backspace'), ('Exp', 'Exp'),
+    ('Ln', 'Ln'), ('Log', 'Log'), ('Imaginary', 'Imaginary'),
+    ('Comma', 'Comma'), ('PowerKey', 'Power'), ('Sin', 'Sin'),
+    ('Cos', 'Cos'), ('Tan', 'Tan'), ('Pi', 'Pi'), ('Sqrt', 'Sqrt'),
+    ('Square', 'Square'), ('7', '7'), ('8', '8'), ('9', '9'),
+    ('LeftParenthesis', 'LeftParenthesis'),
+    ('RightParenthesis', 'RightParenthesis'), ('4', '4'), ('5', '5'),
+    ('6', '6'), ('Multiply', 'Multiplication'), ('Divide', 'Division'),
+    ('1', '1'), ('2', '2'), ('3', '3'), ('Plus', 'Plus'),
+    ('Minus', 'Minus'), ('0', '0'), ('Dot', 'Dot'), ('EE', 'EE'),
+    ('Ans', 'Ans'), ('Equals', 'EXE'),
+)
+assert len(keys) == 45 and len(set(key for key, _ in keys)) == 45
+base = None
+
+def transition(command, label, pressed):
+    global base
+    before = None if base is None else bytearray(bus.ReadBytes(base, 480))
+    getattr(keypad, 'Press' if pressed else 'Release')(command)
+    expected = (label + (' pressed' if pressed else ' released')).encode('ascii')
+    for _ in range(4):
+        monitor.Parse('emulation RunFor "0.05"')
+        if base is None:
+            ram = bytearray(bus.ReadBytes(0x24000000, 0x40000))
+            offset = ram.find(expected)
+            if offset < 0 or ram[offset:offset + 40] != expected + b' ' * (40 - len(expected)):
+                continue
+            base = 0x24000000 + offset
+        cells = bytearray(bus.ReadBytes(base, 480))
+        lines = [bytes(cells[i:i + 40]).rstrip(b' ') for i in range(0, 480, 40)]
+        if cells != before and [line for line in lines if line][-1] == expected:
+            return
+    raise AssertionError('%s transition missing from live Console cells: %r' % (command, expected))
+
+try:
+    monitor.Parse('emulation RunFor "2"')
+    for command, label in keys:
+        transition(command, label, True)
+        transition(command, label, False)
+    for first, second in ((('Left', 'Left'), ('Up', 'Up')),
+                          (('Left', 'Left'), ('Home', 'Home')),
+                          (('Left', 'Left'), ('Alpha', 'Alpha'))):
+        transition(first[0], first[1], True)
+        transition(second[0], second[1], True)
+        transition(first[0], first[1], False)
+        transition(second[0], second[1], False)
+    transition('Power', 'OnOff', True)
+    for _ in range(4):
+        with open(shared, 'r+b') as frame:
+            header = struct.unpack('<6I', frame.read(24))
+            frame.seek(64 + header[3] * 320 * 240 * 3)
+            title = frame.read(320 * 21 * 3)
+            frame.seek(20)
+            frame.write(struct.pack('<I', header[4]))
+        if b'\xff\x00\x00' in title:
+            break
+        monitor.Parse('emulation RunFor "0.05"')
+    else:
+        raise AssertionError('OnOff did not reach the red PANIC crash screen')
+    print('KEYPAD_SELF_TEST_OK')
+finally:
+    shutil.rmtree(root)
+    Environment.SetEnvironmentVariable('LIBRECALC_ROOT', None)
+    Environment.SetEnvironmentVariable('LIBRECALC_LCD_SHM', None)
+"""
+quit

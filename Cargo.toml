@@ -13,7 +13,6 @@ cortex-m-rt = "=0.7.6"
 embedded-graphics = { version = "=0.8.2", default-features = false }
 n0120-hardware = { path = "hardware" }
 stm32h7 = { version = "=0.16.0", default-features = false, features = ["critical-section", "rt", "stm32h725"] }
-tinybmp = { version = "=0.7.0", default-features = false }
 
 [profile.dev]
 panic = "abort"

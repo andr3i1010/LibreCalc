@@ -28,23 +28,15 @@ namespace Antmicro.Renode.Peripherals
             regs[0x0C >> 2] = 0x0000000C;
             regs[0x18 >> 2] = 0x00002000;
             wakeup1Level = false;
-            wakeupFlags = 0;
         }
 
-        public uint ReadDoubleWord(long offset)
-        {
-            if(offset == 0x24)
-            {
-                return wakeupFlags;
-            }
-            return regs[offset >> 2];
-        }
+        public uint ReadDoubleWord(long offset) => regs[offset >> 2];
 
         public void WriteDoubleWord(long offset, uint value)
         {
             if(offset == 0x20)
             {
-                wakeupFlags &= ~(value & 0x3F);
+                regs[0x24 >> 2] &= ~(value & 0x3F);
                 return;
             }
             if(offset == 0x24)
@@ -52,20 +44,10 @@ namespace Antmicro.Renode.Peripherals
                 return;
             }
 
-            regs[offset >> 2] = value;
-            if(offset == 0x0C)
-            {
-                regs[offset >> 2] &= ~0x04000000u;
-                if((value & 0x01000000) != 0)
-                {
-                    regs[offset >> 2] |= 0x04000000;
-                }
-            }
-            else if(offset == 0x18)
-            {
-                regs[offset >> 2] |= 0x00002000;
-            }
-            else if(offset == 0x28)
+            regs[offset >> 2] = offset == 0x0C
+                ? (value & ~0x04000000u) | (value & 0x01000000) << 2
+                : offset == 0x18 ? value | 0x00002000 : value;
+            if(offset == 0x28)
             {
                 CheckWakeup1(false);
             }
@@ -73,10 +55,6 @@ namespace Antmicro.Renode.Peripherals
 
         public void OnGPIO(int number, bool value)
         {
-            if(number != 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(number));
-            }
             var wasActive = IsWakeup1Active(wakeup1Level);
             wakeup1Level = value;
             CheckWakeup1(wasActive);
@@ -84,10 +62,7 @@ namespace Antmicro.Renode.Peripherals
 
         public long Size => 0x400;
 
-        private bool IsWakeup1Active(bool level)
-        {
-            return (regs[0x28 >> 2] & 0x100) == 0 ? level : !level;
-        }
+        private bool IsWakeup1Active(bool level) => (regs[0x28 >> 2] & 0x100) == 0 ? level : !level;
 
         private void CheckWakeup1(bool wasActive)
         {
@@ -95,13 +70,12 @@ namespace Antmicro.Renode.Peripherals
             {
                 return;
             }
-            wakeupFlags |= 1;
+            regs[0x24 >> 2] |= 1;
             machine.SystemBus.GetCPUs().OfType<Arm>().Single().SetEventFlag(true);
         }
 
         private readonly Machine machine;
         private readonly uint[] regs = new uint[256];
         private bool wakeup1Level;
-        private uint wakeupFlags;
     }
 }

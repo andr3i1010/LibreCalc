@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
+mach create "lcd-test"
+python
+"""
+import os, tempfile, shutil
+from System import Environment
+root = tempfile.mkdtemp(prefix='librecalc-lcd-')
+shared = os.path.join(root, 'lcd.shm')
+open(shared, 'wb').write(bytearray(64 + 2 * 320 * 240 * 3))
+Environment.SetEnvironmentVariable('LIBRECALC_LCD_SHM', shared)
+Environment.SetEnvironmentVariable('LIBRECALC_ROOT', root)
+"""
+include @emulator/n0120_lcd.cs
+machine LoadPlatformDescriptionFromString "lcd: N0120Lcd @ sysbus 0x60000000"
+python
+"""
+import struct
+lcd = self.Machine['sysbus.lcd']
+shared = Environment.GetEnvironmentVariable('LIBRECALC_LCD_SHM')
+stream = open(shared, 'r+b', 0)
+header = struct.unpack('<6I', stream.read(24))
+stream.seek(20)
+stream.write(struct.pack('<I', header[4]))
+stream.flush()
+for command, values in ((0x36, (0xa0,)), (0x2a, (0, 0, 0, 0)), (0x2b, (0, 0, 0, 0))):
+    lcd.WriteWord(0, command)
+    for value in values:
+        lcd.WriteWord(0x20000, value)
+lcd.WriteWord(0, 0x2c)
+lcd.WriteWord(0x20000, 0xf800)
+stream.seek(0)
+header = struct.unpack('<6I', stream.read(24))
+lcd.WriteWord(0x20000, 0x07e0)
+stream.seek(20)
+stream.write(struct.pack('<I', header[4]))
+stream.flush()
+"""
+emulation RunFor "0.05"
+python
+"""
+stream.seek(0)
+header = struct.unpack('<6I', stream.read(24))
+stream.seek(64 + header[3] * 320 * 240 * 3)
+assert bytearray(stream.read(3)) == bytearray([0, 255, 0]), 'Final LCD update was not published after acknowledgement'
+stream.close()
+shutil.rmtree(root)
+print('LCD_SELF_TEST_OK')
+"""
+quit

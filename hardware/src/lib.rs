@@ -4,28 +4,14 @@
 
 mod backlight;
 mod console;
+#[cfg(target_os = "none")]
+mod crash;
 mod display;
+mod keyboard;
+mod mcu;
 
-pub use backlight::{Backlight, MAX_LEVEL};
-pub use console::{Console, ConsoleWriter};
-pub use display::{Display, HEIGHT, WIDTH};
-use stm32h7::stm32h725;
-/// Exclusive ownership of the N0120 board hardware.
-pub struct Board {
-    pub backlight: Backlight,
-    pub display: Display,
-    _core: cortex_m::Peripherals,
-    _device: stm32h725::Peripherals,
-}
-
-impl Board {
-    /// Takes the board hardware once.
-    pub fn take() -> Option<Self> {
-        Some(Self {
-            backlight: Backlight::new(),
-            display: Display::new(),
-            _core: cortex_m::Peripherals::take()?,
-            _device: stm32h725::Peripherals::take()?,
-        })
-    }
-}
+pub use backlight::Backlight;
+pub use console::Console;
+pub use display::Display;
+pub use keyboard::{Key, initialize_keyboard, scan_keyboard};
+pub use mcu::initialize_system;

@@ -1,7 +1,0 @@
-// SPDX-License-Identifier: GPL-3.0-only
-// STM32H7B0 LPTIM2 on the N0120 APB4 peripheral bus.
-
-n0120Lptim2: N0120Lptim2 @ sysbus 0x58002400
-    preinit:
-        include @n0120_lptim2.cs
-    0 -> n0120Exti@48

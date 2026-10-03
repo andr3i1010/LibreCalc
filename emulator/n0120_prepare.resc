@@ -2,19 +2,18 @@
 
 mach create "n0120"
 machine LoadPlatformDescription @emulator/n0120.repl
-python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x60000000)"
+sysbus SetHookAfterPeripheralRead syscfg "if offset == 0x20: value = 0x101"
+sysbus Unregister sramBank1
 sysbus Unregister qspi
-python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58026000)"
-python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58000400)"
-python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x58002400)"
-python "self.Machine[\"sysbus\"].UnregisterFromAddress(0x40022000)"
+sysbus Unregister adc3
+sysbus Unregister adcM1S2
 machine LoadPlatformDescription @emulator/n0120_lcd.repl
 machine LoadPlatformDescription @emulator/n0120_ospi.repl
 machine LoadPlatformDescription @emulator/n0120_adc3.repl
-machine LoadPlatformDescription @emulator/n0120_syscfg.repl
 machine LoadPlatformDescription @emulator/n0120_usb.repl
 machine LoadPlatformDescription @emulator/n0120_adc12.repl
-machine LoadPlatformDescription @emulator/n0120_lptim2.repl
+emulation CreateUSBIPServer
+host.usb Register n0120Usb1OtgHs 0
 sysbus LoadBinary @emulator/state/internal.bin 0x08000000
 sysbus LoadBinary @emulator/state/external.bin 0x90000000
 sysbus WriteDoubleWord 0x1FF1E800 0x00230046

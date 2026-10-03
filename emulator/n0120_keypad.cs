@@ -2,9 +2,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using Antmicro.Renode.Core;
-using Antmicro.Renode.Peripherals;
 
 namespace Antmicro.Renode.Peripherals
 {
@@ -22,7 +20,7 @@ namespace Antmicro.Renode.Peripherals
             {
                 columns[column] = new GPIO();
             }
-            Connections = new ReadOnlyDictionary<int, IGPIO>(columns);
+            Connections = columns;
             Reset();
         }
 
@@ -32,38 +30,29 @@ namespace Antmicro.Renode.Peripherals
             {
                 Connections[column].Set(true);
             }
-            Connections[WakeupOutput].Set(pressed[1, 2]);
+            Connections[WakeupOutput].Set(pressed[8]);
         }
 
         public void OnGPIO(int row, bool value)
         {
-            if(row < 0 || row >= Rows)
-            {
-                throw new ArgumentOutOfRangeException(nameof(row));
-            }
             rowLevels[row] = value;
             UpdateColumns();
         }
 
-        public void Press(string key)
-        {
-            SetKey(key, true);
-        }
+        public void Press(string key) => SetKey(key, true);
 
-        public void Release(string key)
-        {
-            SetKey(key, false);
-        }
+        public void Release(string key) => SetKey(key, false);
 
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
 
         private void SetKey(string key, bool value)
         {
-            if(!keyPositions.TryGetValue(key, out var position))
+            var position = Array.IndexOf(keys, key);
+            if(position < 0)
             {
                 throw new ArgumentException($"Unknown N0120 key: {key}", nameof(key));
             }
-            pressed[position / Columns, position % Columns] = value;
+            pressed[position] = value;
             if(position == 8)
             {
                 Connections[WakeupOutput].Set(value);
@@ -78,7 +67,7 @@ namespace Antmicro.Renode.Peripherals
                 var high = true;
                 for(var row = 0; row < Rows; row++)
                 {
-                    if(pressed[row, column] && !rowLevels[row])
+                    if(pressed[row * Columns + column] && !rowLevels[row])
                     {
                         high = false;
                         break;
@@ -88,25 +77,23 @@ namespace Antmicro.Renode.Peripherals
             }
         }
 
-        private readonly bool[,] pressed = new bool[Rows, Columns];
+        private readonly bool[] pressed = new bool[Rows * Columns];
         private readonly bool[] rowLevels = new bool[Rows];
 
         private const int Rows = 9;
         private const int Columns = 6;
         private const int WakeupOutput = Columns;
 
-        private static readonly IReadOnlyDictionary<string, int> keyPositions =
-            new Dictionary<string, int>(StringComparer.Ordinal)
-            {
-                ["Left"] = 0, ["Up"] = 1, ["Down"] = 2, ["Right"] = 3, ["OK"] = 4, ["Back"] = 5,
-                ["Home"] = 6, ["Power"] = 8,
-                ["Shift"] = 12, ["Alpha"] = 13, ["XNT"] = 14, ["Var"] = 15, ["Toolbox"] = 16, ["Backspace"] = 17,
-                ["Exp"] = 18, ["Ln"] = 19, ["Log"] = 20, ["Imaginary"] = 21, ["Comma"] = 22, ["PowerKey"] = 23,
-                ["Sin"] = 24, ["Cos"] = 25, ["Tan"] = 26, ["Pi"] = 27, ["Sqrt"] = 28, ["Square"] = 29,
-                ["7"] = 30, ["8"] = 31, ["9"] = 32, ["LeftParenthesis"] = 33, ["RightParenthesis"] = 34,
-                ["4"] = 36, ["5"] = 37, ["6"] = 38, ["Multiply"] = 39, ["Divide"] = 40,
-                ["1"] = 42, ["2"] = 43, ["3"] = 44, ["Plus"] = 45, ["Minus"] = 46,
-                ["0"] = 48, ["Dot"] = 49, ["EE"] = 50, ["Ans"] = 51, ["Equals"] = 52,
-            };
+        private static readonly string[] keys =
+        {
+            "Left", "Up", "Down", "Right", "OK", "Back", "Home", null, "Power", null, null, null,
+            "Shift", "Alpha", "XNT", "Var", "Toolbox", "Backspace",
+            "Exp", "Ln", "Log", "Imaginary", "Comma", "PowerKey",
+            "Sin", "Cos", "Tan", "Pi", "Sqrt", "Square",
+            "7", "8", "9", "LeftParenthesis", "RightParenthesis", null,
+            "4", "5", "6", "Multiply", "Divide", null,
+            "1", "2", "3", "Plus", "Minus", null,
+            "0", "Dot", "EE", "Ans", "Equals",
+        };
     }
 }

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
+mach create "usb-test"
+include @emulator/n0120_usb.cs
+machine LoadPlatformDescriptionFromString "usb: N0120UsbOtgHs @ sysbus 0x40040000"
+python
+"""
+usb = self.Machine['sysbus.usb']
+assert usb.ReadDoubleWord(0xc) == 0xa00
+assert usb.ReadDoubleWord(0x800) == 0x02200000
+for offset in (0xc, 0x24, 0x28, 0x800, 0xb10, 0xe00):
+    usb.WriteDoubleWord(offset, 123)
+    assert usb.ReadDoubleWord(offset) == 123
+usb.Reset()
+assert usb.ReadDoubleWord(0x24) == 0
+for connected in (True, False):
+    usb.WriteDoubleWord(0xe08, int(connected))
+    assert usb.ReadDoubleWord(0) == (0x90000 if connected else 0x10000)
+print('USB_SELF_TEST_OK')
+"""
+quit

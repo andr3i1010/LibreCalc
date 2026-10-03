@@ -139,11 +139,9 @@ dependencies = [
 name = "librecalc-bootloader"
 version = "0.1.0"
 dependencies = [
- "cortex-m",
  "cortex-m-rt",
  "embedded-graphics",
  "n0120-hardware",
- "tinybmp",
 ]
 
 [[package]]
@@ -167,6 +165,7 @@ name = "n0120-hardware"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
+ "cortex-m-rt",
  "embedded-graphics",
  "stm32h7",
 ]
@@ -258,15 +257,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tinybmp"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acb540c3e6f049f914d9c3eaf86ca415e264cf42d2b25bb5c24241af1a1e3aea"
-dependencies = [
- "embedded-graphics",
 ]
 
 [[package]]
