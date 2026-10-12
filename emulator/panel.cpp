@@ -156,7 +156,7 @@ int keyIndexForQt(int key) {
 bool decodeLedMarker(const QByteArray &bytes, QColor *color) {
     static const QRegularExpression marker(
         QStringLiteral("LCLED:([0-9A-Fa-f]+):([0-9A-Fa-f]+):([0-9A-Fa-f]+):"
-                       "([0-9A-Fa-f]+):([0-9A-Fa-f]+):([0-9A-Fa-f]+):([0-9A-Fa-f]+)"));
+                       "([0-9A-Fa-f]+):([0-9A-Fa-f]+):([0-9A-Fa-f]+)"));
     auto matches = marker.globalMatch(QString::fromLatin1(bytes));
     QRegularExpressionMatch match;
     while (matches.hasNext()) {
@@ -166,7 +166,7 @@ bool decodeLedMarker(const QByteArray &bytes, QColor *color) {
         return false;
     }
 
-    std::array<quint32, 7> values{};
+    std::array<quint32, 6> values{};
     for (int i = 0; i < static_cast<int>(values.size()); ++i) {
         bool valid = false;
         values[i] = match.captured(i + 1).toUInt(&valid, 16);
@@ -177,9 +177,8 @@ bool decodeLedMarker(const QByteArray &bytes, QColor *color) {
 
     const quint32 cr1 = values[0];
     const quint32 ccer = values[1];
-    const quint32 period = values[2] & 0xffff;
-    const quint32 bdtr = values[6];
-    if (!(cr1 & 1) || !(bdtr & 0x8000) || period == 0) {
+    const quint32 period = (values[2] & 0xffff) + 1;
+    if (!(cr1 & 1)) {
         *color = Qt::black;
         return true;
     }
@@ -233,6 +232,8 @@ public:
         resize(520, 1040);
 
         rootPath = qEnvironmentVariable("LIBRECALC_ROOT", QDir::currentPath());
+        statePath = qEnvironmentVariable("LIBRECALC_STATE",
+                                         rootPath + QStringLiteral("/emulator/state"));
         display = QImage(LcdWidth, LcdHeight, QImage::Format_RGB32);
         display.fill(QColor("#f5f7f8"));
 
@@ -254,11 +255,10 @@ public:
             }
             ledQueryPending = true;
             sendCommand(QStringLiteral(
-                "python \"b=self.Machine['sysbus']; print('LCLED:%X:%X:%X:%X:%X:%X:%X' % "
-                "(b.ReadDoubleWord(0x40010000),b.ReadDoubleWord(0x40010020),"
-                "b.ReadDoubleWord(0x4001002C),b.ReadDoubleWord(0x40010034),"
-                "b.ReadDoubleWord(0x40010038),b.ReadDoubleWord(0x4001003C),"
-                "b.ReadDoubleWord(0x40010044)))\""));
+                "python \"b=self.Machine['sysbus']; print('LCLED:%X:%X:%X:%X:%X:%X' % "
+                "(b.ReadDoubleWord(0x40000400),b.ReadDoubleWord(0x40000420),"
+                "b.ReadDoubleWord(0x4000042C),b.ReadDoubleWord(0x40000434),"
+                "b.ReadDoubleWord(0x40000438),b.ReadDoubleWord(0x4000043C)))\""));
         });
         connect(&usbPoll, &QTimer::timeout, this, [this] {
             if (monitor.state() != QAbstractSocket::ConnectedState) {
@@ -342,6 +342,11 @@ public:
                 bootKeysToRelease = resetHeldKeys;
                 resetHeldKeys.clear();
                 sendCommand(QStringLiteral("include @emulator/n0120_prepare.resc"));
+                sendCommand(QStringLiteral("sysbus LoadBinary @%1/internal.bin 0x08000000")
+                                .arg(statePath));
+                sendCommand(QStringLiteral("sysbus LoadBinary @%1/external.bin 0x90000000")
+                                .arg(statePath));
+                sendCommand(QStringLiteral("sysbus WriteDoubleWord 0x0807FA00 0xFFFFFE51"));
                 if (connectUsb) {
                     usbState = UsbState::Waiting;
                     writeUsbControl(1);
@@ -459,9 +464,9 @@ public:
         }
 
         QColor decoded(Qt::magenta);
-        if (!decodeLedMarker("LCLED:1:111:3A:0:3A:3A:8000", &decoded) || decoded != QColor(255, 0, 0) ||
+        if (!decodeLedMarker("LCLED:1:111:39:0:3A:3A", &decoded) || decoded != QColor(255, 0, 0) ||
             decodeLedMarker("LCLED:not-a-register-dump", &decoded) ||
-            !decodeLedMarker("LCLED:0:111:3A:0:0:0:8000", &decoded) || decoded != Qt::black) {
+            !decodeLedMarker("LCLED:0:111:39:0:0:0", &decoded) || decoded != Qt::black) {
             *failure = QStringLiteral("LED monitor decoding failed");
             return false;
         }
@@ -786,6 +791,7 @@ private:
     QHash<int, int> keyboardKeys;
     QHash<int, int> touchKeys;
     QString rootPath;
+    QString statePath;
     QString lcdSharedMemoryPath;
     QString statusText = QStringLiteral("Starting calculator…");
     QString usbipPath;
@@ -1050,8 +1056,12 @@ private:
         }
         if (--held[index] == 0) {
             held.remove(index);
-            sendCommand(QStringLiteral("gpioPortA.n0120Keypad Release \"%1\"")
-                            .arg(QLatin1String(Keys[index].name)));
+            QTimer::singleShot(100, this, [this, index] {
+                if (!held.contains(index)) {
+                    sendCommand(QStringLiteral("gpioPortA.n0120Keypad Release \"%1\"")
+                                    .arg(QLatin1String(Keys[index].name)));
+                }
+            });
         }
         update();
     }
@@ -1318,8 +1328,8 @@ private:
     }
 
     void startRenode() {
-        if (!QFileInfo::exists(rootPath + QStringLiteral("/emulator/state/internal.bin")) ||
-            !QFileInfo::exists(rootPath + QStringLiteral("/emulator/state/external.bin"))) {
+        if (!QFileInfo::exists(statePath + QStringLiteral("/internal.bin")) ||
+            !QFileInfo::exists(statePath + QStringLiteral("/external.bin"))) {
             setStatus(QStringLiteral("Flash virtual storage first\n\nmake flash-virtual"), true);
             return;
         }
@@ -1336,6 +1346,8 @@ private:
         screenSequence = 0;
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("LIBRECALC_LCD_SHM"), lcdSharedMemoryPath);
+        environment.insert(QStringLiteral("LIBRECALC_ROOT"), rootPath);
+        environment.insert(QStringLiteral("LIBRECALC_STATE"), statePath);
         renode.setProcessEnvironment(environment);
         renode.setWorkingDirectory(rootPath);
         renode.setStandardOutputFile(QProcess::nullDevice());

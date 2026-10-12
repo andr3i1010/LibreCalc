@@ -1,5 +1,5 @@
 [workspace]
-members = ["bootloader", "hardware", "kernel"]
+members = ["bootloader", "hardware", "kernel", "kernel/abi"]
 resolver = "3"
 
 [workspace.package]
@@ -12,6 +12,7 @@ cortex-m = { version = "=0.7.9", features = ["cm7", "critical-section-single-cor
 cortex-m-rt = "=0.7.6"
 embedded-graphics = { version = "=0.8.2", default-features = false }
 n0120-hardware = { path = "hardware" }
+librecalc-abi = { path = "kernel/abi" }
 stm32h7 = { version = "=0.16.0", default-features = false, features = ["critical-section", "rt", "stm32h725"] }
 
 [profile.dev]

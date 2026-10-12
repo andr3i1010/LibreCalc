@@ -16,6 +16,9 @@ emulation CreateUSBIPServer
 host.usb Register n0120Usb1OtgHs 0
 sysbus LoadBinary @emulator/state/internal.bin 0x08000000
 sysbus LoadBinary @emulator/state/external.bin 0x90000000
+# Factory hardware revision 430 identifies the N0120 keypad layout. This word
+# lives in the metadata page that bootloader updates deliberately preserve.
+sysbus WriteDoubleWord 0x0807FA00 0xFFFFFE51
 sysbus WriteDoubleWord 0x1FF1E800 0x00230046
 sysbus WriteDoubleWord 0x1FF1E804 0x34335114
 sysbus WriteDoubleWord 0x1FF1E808 0x36333839
@@ -24,5 +27,5 @@ cpu VectorTableOffset 0x08000000
 macro persistStorage
 """
     pause
-    python "import os; state=os.path.join(os.environ.get('LIBRECALC_ROOT', '.'), 'emulator', 'state'); open(os.path.join(state, 'internal.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x08000000, 0x80000))); open(os.path.join(state, 'external.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x90000000, 0x800000)))"
+    python "import os; state=os.environ.get('LIBRECALC_STATE', os.path.join(os.environ.get('LIBRECALC_ROOT', '.'), 'emulator', 'state')); open(os.path.join(state, 'internal.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x08000000, 0x80000))); open(os.path.join(state, 'external.bin'), 'wb').write(bytearray(self.Machine['sysbus'].ReadBytes(0x90000000, 0x800000)))"
 """

@@ -25,7 +25,7 @@ pub fn initialize_keyboard() {
         .modify(|r, w| unsafe { w.bits(r.bits() & !0x00CC_3F0C) });
 }
 
-pub fn scan_keyboard() -> u64 {
+pub fn read_keyboard() -> u64 {
     let rows = unsafe { &*stm32h725::GPIOA::ptr() };
     let columns = unsafe { &*stm32h725::GPIOC::ptr() };
     let mut bits = 0;
@@ -45,71 +45,59 @@ pub fn scan_keyboard() -> u64 {
     bits
 }
 
-macro_rules! keys {
-    ($($key:ident = $position:literal => $name:literal),+ $(,)?) => {
-        #[repr(u8)]
-        #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-        pub enum Key { $($key = $position),+ }
-
-        impl Key {
-            pub const ALL: &[Self] = &[$(Self::$key),+];
-
-            pub const fn is_pressed(self, state: u64) -> bool {
-                state & (1 << self as u8) != 0
-            }
-
-            pub const fn name(self) -> &'static str {
-                match self { $(Self::$key => $name),+ }
-            }
-        }
-    };
+#[repr(u8)]
+#[derive(Copy, Clone)]
+pub enum Key {
+    Left = 0,
+    Up = 1,
+    Down = 2,
+    Right = 3,
+    OK = 4,
+    Back = 5,
+    Home = 6,
+    OnOff = 8,
+    Shift = 12,
+    Alpha = 13,
+    XNT = 14,
+    Var = 15,
+    Toolbox = 16,
+    Backspace = 17,
+    Exp = 18,
+    Ln = 19,
+    Log = 20,
+    Imaginary = 21,
+    Comma = 22,
+    Power = 23,
+    Sin = 24,
+    Cos = 25,
+    Tan = 26,
+    Pi = 27,
+    Sqrt = 28,
+    Square = 29,
+    Seven = 30,
+    Eight = 31,
+    Nine = 32,
+    LeftParenthesis = 33,
+    RightParenthesis = 34,
+    Four = 36,
+    Five = 37,
+    Six = 38,
+    Multiplication = 39,
+    Division = 40,
+    One = 42,
+    Two = 43,
+    Three = 44,
+    Plus = 45,
+    Minus = 46,
+    Zero = 48,
+    Dot = 49,
+    EE = 50,
+    Ans = 51,
+    EXE = 52,
 }
 
-keys! {
-    Left = 0 => "Left",
-    Up = 1 => "Up",
-    Down = 2 => "Down",
-    Right = 3 => "Right",
-    OK = 4 => "OK",
-    Back = 5 => "Back",
-    Home = 6 => "Home",
-    OnOff = 8 => "OnOff",
-    Shift = 12 => "Shift",
-    Alpha = 13 => "Alpha",
-    XNT = 14 => "XNT",
-    Var = 15 => "Var",
-    Toolbox = 16 => "Toolbox",
-    Backspace = 17 => "Backspace",
-    Exp = 18 => "Exp",
-    Ln = 19 => "Ln",
-    Log = 20 => "Log",
-    Imaginary = 21 => "Imaginary",
-    Comma = 22 => "Comma",
-    Power = 23 => "Power",
-    Sin = 24 => "Sin",
-    Cos = 25 => "Cos",
-    Tan = 26 => "Tan",
-    Pi = 27 => "Pi",
-    Sqrt = 28 => "Sqrt",
-    Square = 29 => "Square",
-    Seven = 30 => "7",
-    Eight = 31 => "8",
-    Nine = 32 => "9",
-    LeftParenthesis = 33 => "LeftParenthesis",
-    RightParenthesis = 34 => "RightParenthesis",
-    Four = 36 => "4",
-    Five = 37 => "5",
-    Six = 38 => "6",
-    Multiplication = 39 => "Multiplication",
-    Division = 40 => "Division",
-    One = 42 => "1",
-    Two = 43 => "2",
-    Three = 44 => "3",
-    Plus = 45 => "Plus",
-    Minus = 46 => "Minus",
-    Zero = 48 => "0",
-    Dot = 49 => "Dot",
-    EE = 50 => "EE",
-    Ans = 51 => "Ans",
-    EXE = 52 => "EXE",
+impl Key {
+    pub const fn is_pressed(self, state: u64) -> bool {
+        state & (1u64 << self as u8) != 0
+    }
 }

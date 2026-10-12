@@ -136,6 +136,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "librecalc-abi"
+version = "0.1.0"
+
+[[package]]
 name = "librecalc-bootloader"
 version = "0.1.0"
 dependencies = [
@@ -151,6 +155,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "embedded-graphics",
+ "librecalc-abi",
  "n0120-hardware",
 ]
 
