@@ -1,5 +1,7 @@
 [workspace]
-members = ["bootloader", "hardware", "kernel", "kernel/abi"]
+members = ["bootloader", "hardware", "kernel", "kernel/abi", "userspace/home"]
+# shortcut: include Home in default builds once its process linker script exists.
+default-members = ["bootloader", "hardware", "kernel", "kernel/abi"]
 resolver = "3"
 
 [workspace.package]

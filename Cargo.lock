@@ -149,6 +149,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "librecalc-home"
+version = "0.1.0"
+
+[[package]]
 name = "librecalc-kernel"
 version = "0.1.0"
 dependencies = [

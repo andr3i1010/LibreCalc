@@ -14,10 +14,10 @@ NumWorks N0120 calculator.
 - Rustup
 - GNU Make
 - GNU Arm Embedded tools (`arm-none-eabi-objcopy` and `arm-none-eabi-size`)
-- Python 3
-- Renode (tested with 1.16.1)
-- Qt 6 development files and `qmake6`
-- Optional virtual USB on Linux: `usbip` and `pkexec`
+- Python 3 (emulator)
+- Renode (tested with 1.16.1) (emulator)
+- Qt 6 development files and `qmake6` (emulator)
+- Optional virtual USB on Linux: `usbip` and `pkexec` (emulator)
 
 Rustup reads `rust-toolchain.toml` and installs the pinned compiler, formatter,
 linter, editor engine, and Cortex-M target.
