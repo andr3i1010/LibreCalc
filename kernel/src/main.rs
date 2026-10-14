@@ -15,11 +15,6 @@ mod memory;
 mod process;
 mod svc;
 
-unsafe extern "C" {
-    static _user_ram_start: u8;
-    static _user_ram_end: u8;
-}
-
 #[used]
 #[unsafe(link_section = ".image_header.version")]
 static IMAGE_VERSION: [u8; 8] = {
@@ -50,39 +45,16 @@ fn main() -> ! {
     writeln!(console, "LibreCalc kernel {}", env!("CARGO_PKG_VERSION")).unwrap();
     writeln!(console, "Initializing memory...").unwrap();
 
-    let mut memory = unsafe {
-        memory::Memory::new(
-            (&raw const _user_ram_start) as usize,
-            (&raw const _user_ram_end) as usize,
-        )
-    };
+    memory::init();
     writeln!(console, "Memory ready.").unwrap();
 
-    let process_id = 1;
-    let stack_size = memory::PAGE_SIZE;
+    let process_id = process::create(memory::PAGE_SIZE).expect("failed to create process");
 
-    let stack_start = memory
-        .alloc(process_id, stack_size)
-        .expect("failed to allocate test stack");
+    assert_eq!(process_id, 1);
 
-    let stack_end = stack_start + stack_size;
-    writeln!(console, "Stack allocated: {stack_size} bytes").unwrap();
-    writeln!(console, "Start: 0x{stack_start:08X}").unwrap();
-    writeln!(console, "End:   0x{stack_end:08X}").unwrap();
-
-    let stack_ptr = stack_end - core::mem::size_of::<cortex_m_rt::ExceptionFrame>();
-    assert!(stack_ptr >= stack_start && stack_ptr % 8 == 0);
-    writeln!(console, "CPU frame: 0x{stack_ptr:08X}").unwrap();
-
-    let frame = unsafe { 
-        &mut *(stack_ptr as *mut cortex_m_rt::ExceptionFrame)
-    };
-
-    unsafe {
-        frame.set_xpsr(1 << 24);
-    }
-
-    writeln!(console, "CPU flags: 0x{:08X}", frame.xpsr()).unwrap();
+    writeln!(console, "Created PID: {process_id}").unwrap();
+    writeln!(console, "Current PID: {:?}", process::current_id()).unwrap();
+    
 
     loop {
         cortex_m::asm::wfi();

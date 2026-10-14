@@ -20,6 +20,14 @@ struct Trampoline {
 }
 
 #[used]
+#[unsafe(link_section = ".epsilon_keypad_rows")]
+static KEYPAD_ROWS: [u8; 9] = [1, 0, 2, 3, 6, 7, 8, 10, 15];
+
+#[used]
+#[unsafe(link_section = ".epsilon_keypad_columns")]
+static KEYPAD_COLUMNS: [u8; 12] = [1, 2, 3, 4, 5, 6, 1, 9, 11, 4, 5, 6];
+
+#[used]
 #[unsafe(link_section = ".trampoline")]
 static TRAMPOLINE: Trampoline = Trampoline {
     suspend,
@@ -36,14 +44,6 @@ static TRAMPOLINE: Trampoline = Trampoline {
     strlen,
     strncmp,
 };
-
-#[used]
-#[unsafe(link_section = ".epsilon_keypad_rows")]
-static KEYPAD_ROWS: [u8; 9] = [1, 0, 2, 3, 6, 7, 8, 10, 15];
-
-#[used]
-#[unsafe(link_section = ".epsilon_keypad_columns")]
-static KEYPAD_COLUMNS: [u8; 12] = [1, 2, 3, 4, 5, 6, 1, 9, 11, 4, 5, 6];
 
 extern "C" fn suspend() {
     #[cfg(target_arch = "arm")]

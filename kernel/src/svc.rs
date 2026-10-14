@@ -53,7 +53,6 @@ macro_rules! syscalls {
         syscalls!(@handlers $($definitions)*);
 
         pub(super) fn route(number: u32, args: [usize; 3], privileged: bool) -> i32 {
-            // shortcut: deny app calls until process memory and permissions can be checked.
             syscalls!(@route number, args, privileged; $($definitions)*)
         }
     };
@@ -67,7 +66,6 @@ fn write_text(text: &[u8], [address, capacity, _]: [usize; 3]) -> i32 {
     if address == 0 || address.checked_add(text.len()).is_none() {
         return Error::EFAULT.code();
     }
-    // Privileged callers are kernel code; the public wrapper passes a valid mutable slice.
     unsafe { core::ptr::copy_nonoverlapping(text.as_ptr(), address as *mut u8, text.len()) };
     text.len() as i32
 }
