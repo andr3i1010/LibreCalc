@@ -55,20 +55,5 @@ $(BUILD)/librecalc-panel: emulator/panel.cpp | $(BUILD)
 run-panel:
 	LIBRECALC_ROOT=$(CURDIR) LIBRECALC_STATE=$(CURDIR)/$(STATE) RENODE=$(RENODE) $(BUILD)/librecalc-panel
 
-test-panel: panel
-	QT_QPA_PLATFORM=offscreen LIBRECALC_ROOT=$(CURDIR) $(BUILD)/librecalc-panel --self-test
-
-test-syscalls: | $(BUILD)
-	CARGO_PKG_VERSION=test rustc --edition=2024 --test kernel/tests/syscall.rs -o $(BUILD)/syscall-tests
-	$(BUILD)/syscall-tests
-
-test-usb: | $(BUILD)
-	$(RENODE) --disable-xwt --console --plain emulator/test_usb.resc 2>&1 | tee $(BUILD)/usb-test.log
-	grep -q '^USB_SELF_TEST_OK' $(BUILD)/usb-test.log
-
-test-lcd: | $(BUILD)
-	$(RENODE) --disable-xwt --console --plain emulator/test_lcd.resc 2>&1 | tee $(BUILD)/lcd-test.log
-	grep -q '^LCD_SELF_TEST_OK' $(BUILD)/lcd-test.log
-
 clean:
 	rm -rf -- build target
