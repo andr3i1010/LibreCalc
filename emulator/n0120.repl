@@ -4,11 +4,14 @@
 
 using "platforms/cpus/stm32h743.repl"
 
-// N0120 external QSPI flash: 8 MiB at the XIP address used by both slots.
+fmc: @ none
+pwr: @ none
+
+// N0120 external QSPI flash: 8 MiB at the XIP base address.
 n0120ExternalFlash: Memory.MappedMemory @ sysbus 0x90000000
     size: 0x800000
 
-// N0120-only H7B0 peripheral banks missing from Renode's H743 platform.
+// N0120-only H725 peripheral banks missing from Renode's H743 platform.
 // The stock boot flow configures these registers before using the LCD path.
 n0120Fmc: Memory.MappedMemory @ sysbus 0x52004000
     size: 0x1000

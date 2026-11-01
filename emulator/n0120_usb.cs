@@ -24,6 +24,10 @@ namespace Antmicro.Renode.Peripherals
 
         public USBDeviceCore USBCore { get; }
 
+        public IUSBConnection ConnectUSB() => USBCore;
+
+        public byte Address => USBCore.Address;
+
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
 
         public long Size => 0x2000;
@@ -36,8 +40,9 @@ namespace Antmicro.Renode.Peripherals
                 registers[Gusbcfg] = 0x0a00;
                 registers[Dcfg] = 0x02200000;
                 gotgint = gahbcfg = gintsts = gintmsk = gccfg = dctl = diepmsk = daintmsk =
-                    diepctl0 = diepint0 = dieptsiz0 = 0;
-                doepctl0 = 0x8000;
+                    diepint0 = dieptsiz0 = 0;
+                // EP0 is always active on real hardware (USBAEP reads as 1).
+                diepctl0 = doepctl0 = 0x8000;
                 rxStatuses.Clear();
                 rxFifo.Clear();
                 USBCore.Reset();
@@ -91,7 +96,7 @@ namespace Antmicro.Renode.Peripherals
                     return status;
                 }
                 case Gccfg: return gccfg;
-                case 0x03c: return 0x4f54280a; // GSNPSID
+                case 0x03c: return 0x00003100; // CID, as reported by STM32H7 cores
                 case Dctl: return dctl;
                 case 0x808: return 0x10 | (cableConnected ? 3u << 1 : 0); // DSTS
                 case Diepmsk: return diepmsk;
@@ -251,9 +256,7 @@ namespace Antmicro.Renode.Peripherals
                         QueueNextOutPacket();
                         if(statusStage == StatusStage.Out)
                         {
-                            statusStage = StatusStage.OutQueued;
-                            QueueReceive(Array.Empty<byte>(), OutReceived);
-                            QueueReceive(Array.Empty<byte>(), OutCompleted);
+                            QueueOutStatus();
                         }
                     }
                     if((value & EndpointEnable) != 0)
@@ -335,8 +338,9 @@ namespace Antmicro.Renode.Peripherals
             statusStage = StatusStage.None;
             txFifo.Clear();
             reply.Clear();
+            // The core clears an EP0 STALL in both directions on SETUP.
             diepctl0 &= ~Stall;
-            doepctl0 |= NAKStatus;
+            doepctl0 = (doepctl0 & ~Stall) | NAKStatus;
             QueueReceive(Packet.Encode(packet), 6);
             QueueReceive(Array.Empty<byte>(), SetupCompleted);
         }
@@ -371,6 +375,12 @@ namespace Antmicro.Renode.Peripherals
                (count < MaximumPacketSizeBytes || reply.Count >= pendingPacket.Count))
             {
                 statusStage = StatusStage.Out;
+                // An EP0 OUT that is already armed (NAK cleared right after
+                // SETUP) accepts the host's status packet without another CNAK.
+                if((doepctl0 & NAKStatus) == 0)
+                {
+                    QueueOutStatus();
+                }
             }
             else if(pendingPacket.Direction == Direction.HostToDevice)
             {
@@ -390,6 +400,13 @@ namespace Antmicro.Renode.Peripherals
             Array.Copy(pendingOut, pendingOutOffset, packet, 0, count);
             pendingOutOffset += count;
             QueueReceive(packet, OutReceived);
+            QueueReceive(Array.Empty<byte>(), OutCompleted);
+        }
+
+        private void QueueOutStatus()
+        {
+            statusStage = StatusStage.OutQueued;
+            QueueReceive(Array.Empty<byte>(), OutReceived);
             QueueReceive(Array.Empty<byte>(), OutCompleted);
         }
 

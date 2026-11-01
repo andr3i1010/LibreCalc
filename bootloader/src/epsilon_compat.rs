@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use core::ptr::{read_volatile, write_volatile};
+use n0120_hardware::{
+    EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END, INTERNAL_FLASH_START,
+    erase_external_flash, program_external_flash, suspend,
+};
 
 #[repr(C)]
 struct Trampoline {
@@ -45,52 +49,43 @@ static TRAMPOLINE: Trampoline = Trampoline {
     strncmp,
 };
 
-extern "C" fn suspend() {
-    #[cfg(target_arch = "arm")]
-    unsafe {
-        let wakeup_clear = 0x5802_4820 as *mut u32;
-        let wakeup_enable = 0x5802_4828 as *mut u32;
-        let wakeup = read_volatile(wakeup_enable);
-        write_volatile(wakeup_enable, (wakeup & !0x0003_0101) | 0x0002_0001);
-        write_volatile(wakeup_clear, 1);
-        let scr = 0xE000_ED10 as *mut u32;
-        write_volatile(scr, read_volatile(scr) & !(1 << 2));
-        core::arch::asm!("dsb sy", "sev", "wfe", "wfe", options(nostack));
-        write_volatile(wakeup_clear, 1);
-        let rcc_apb1_clock_enable = 0x5802_44E8 as *mut u32;
-        write_volatile(
-            rcc_apb1_clock_enable,
-            read_volatile(rcc_apb1_clock_enable) | 1,
-        );
-
-        let timer = 0x4000_0000 as *mut u32;
-        write_volatile(timer.add(10), 53_999);
-        write_volatile(timer.add(11), 2_500);
-        write_volatile(timer.add(5), 1);
-        write_volatile(timer.add(4), read_volatile(timer.add(4)) & !1);
-        write_volatile(timer.add(3), read_volatile(timer.add(3)) | 1);
-        write_volatile(timer, read_volatile(timer) | 5);
-
-        write_volatile((0xE000_E400usize + 28) as *mut u8, 0x70);
-        write_volatile(0xE000_E280 as *mut u32, 1 << 28);
-        for (bank, mask) in [0x5080_07C0, 0x0040_0100, 0, 0x8000_0000]
-            .into_iter()
-            .enumerate()
-        {
-            write_volatile((0xE000_E100 as *mut u32).add(bank), mask);
-        }
-
-        write_volatile(0xE000_E014 as *mut u32, 0x0001_07AB);
-        write_volatile(0xE000_E018 as *mut u32, 0);
-        write_volatile(0xE000_E010 as *mut u32, 7);
-        core::arch::asm!("dsb sy", "isb sy", options(nostack));
-    }
+extern "C" fn erase_sector(sector: u32) {
+    let offset = match sector {
+        0..=7 => sector * 0x1000,
+        8 => 0x8000,
+        9..=135 => (sector - 8) * 0x1_0000,
+        _ => return,
+    };
+    let address = EXTERNAL_FLASH_START + offset;
+    let _ = erase_external_flash::<false>(address);
 }
 
-// no numworks were not replacing our SUPERIOR bootloader 😘😘😘
-extern "C" fn erase_sector(_sector: u32) {}
+extern "C" fn write_memory(destination: *mut u8, source: *const u8, length: usize) {
+    let address = destination as u32;
+    let Some(end) = address.checked_add(length as u32) else {
+        return;
+    };
+    let Some(source_end) = (source as u32).checked_add(length as u32) else {
+        return;
+    };
+    if length == 0
+        || address < EXTERNAL_FLASH_START
+        || end > EXTERNAL_FLASH_END
+        || ![
+            (INTERNAL_FLASH_START, INTERNAL_FLASH_END),
+            (EXTERNAL_FLASH_START, EXTERNAL_FLASH_END),
+            (0x2000_0000, 0x2002_0000),
+            (0x2400_0000, 0x2405_0000),
+        ]
+        .into_iter()
+        .any(|(start, end)| source as u32 >= start && source_end <= end)
+    {
+        return;
+    }
 
-extern "C" fn write_memory(_destination: *mut u8, _source: *const u8, _length: usize) {}
+    let data = unsafe { core::slice::from_raw_parts(source, length) };
+    let _ = program_external_flash::<false>(address, data);
+}
 
 extern "C" fn memcmp(a: *const u8, b: *const u8, length: usize) -> i32 {
     for i in 0..length {

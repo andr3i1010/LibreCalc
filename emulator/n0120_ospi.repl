@@ -8,27 +8,94 @@ n0120Ospi1: Python.PythonPeripheral @ sysbus 0x52005000
     script: '''
 if request.IsInit:
     regs = [0] * 1024
+    sysbus = emulationManager.Instance.CurrentEmulation.Machines[0].SystemBus
     status = 0
+    status1 = 0
+    status2 = 0
     instruction = 0
+    address = 0
+    data = []
     write_enable = False
+    continuous_read = False
+    busy_polls = 0
+    # shortcut: any BP/TB/SEC or CMP bit protects the whole chip; model exact ranges if a test needs them.
+    def protected():
+        return status1 & 0x7C or status2 & 0x40
 elif request.IsWrite:
     if request.Offset == 0x24:
         status &= ~(request.Value & 0x1F)
+    elif status & 0x20 and request.Offset in (0x40, 0x48, 0x100, 0x108, 0x110, 0x120) or status & 0x20 and request.Offset == 0x00 and not request.Value & 2:
+        # Like hardware, configuration writes are ignored while BUSY is still set.
+        pass
     else:
         regs[request.Offset >> 2] = request.Value
-        if request.Offset == 0x110:
+        if request.Offset == 0x00 and request.Value & 2:
+            regs[0] = request.Value & ~2
+            status &= ~0x20
+            busy_polls = 0
+        elif request.Offset == 0x110:
             instruction = request.Value & 0xFF
-            if instruction == 0x06:
+            data = []
+            if instruction == 0xFF:
+                continuous_read = False
+            elif instruction == 0xEB and regs[0] >> 28 & 3 == 3:
+                continuous_read = regs[0x120 >> 2] & 0x30 == 0x20
+            elif instruction == 0x06 and not continuous_read:
                 write_enable = True
             elif instruction in (0x66, 0x99):
                 write_enable = False
-            status = (status & ~0x20) | 0x02
+            if instruction in (0x06, 0x66, 0x99, 0xAB, 0xFF):
+                status |= 0x22
+                busy_polls = 2
+            elif instruction in (0x05, 0x15, 0x35, 0x9F):
+                status |= 0x22
+                busy_polls = 2
+        elif request.Offset == 0x48:
+            address = request.Value & 0xFFFFFF
+            if instruction in (0x20, 0x52, 0xD8):
+                sizes = {0x20: 0x1000, 0x52: 0x8000, 0xD8: 0x10000}
+                erase_size = sizes[instruction]
+                valid = (instruction == 0x20 and address < 0x8000 and address % 0x1000 == 0) or (instruction == 0x52 and address == 0x8000) or (instruction == 0xD8 and address >= 0x10000 and address % 0x10000 == 0)
+                if write_enable and not continuous_read and not protected() and valid and address + erase_size <= 0x800000:
+                    from System import Array, Byte
+                    sysbus.WriteBytes(Array[Byte]([0xFF] * erase_size), 0x90000000 + address)
+                    write_enable = False
+                status |= 0x22
+                busy_polls = 2
+        elif request.Offset == 0x50:
+            for index in range(request.Length):
+                data.append((request.Value >> (8 * index)) & 0xFF)
+            length = (regs[0x40 >> 2] & 0xFFFFFFFF) + 1
+            if len(data) >= length:
+                data = data[:length]
+                if instruction == 0x31 and write_enable and not continuous_read:
+                    status2 = data[0]
+                    write_enable = False
+                elif instruction == 0x01 and write_enable and not continuous_read:
+                    status1 = data[0] & 0xFC
+                    if length > 1:
+                        status2 = data[1]
+                    write_enable = False
+                elif instruction in (0x32, 0x33) and write_enable and not continuous_read and not protected() and address + length <= 0x800000:
+                    current = sysbus.ReadBytes(0x90000000 + address, length)
+                    for index in range(length):
+                        current[index] &= data[index]
+                    sysbus.WriteBytes(current, 0x90000000 + address)
+                    write_enable = False
+                status |= 0x22
+                busy_polls = 2
 elif request.IsRead:
     if request.Offset == 0x20:
         request.Value = status
+        if status & 0x20:
+            busy_polls -= 1
+            if busy_polls <= 0:
+                status &= ~0x20
     elif request.Offset == 0x50:
         if instruction == 0x05:
-            request.Value = 0x02 if write_enable else 0
+            request.Value = status1 | (0x02 if write_enable else 0)
+        elif instruction == 0x35:
+            request.Value = status2
         else:
             request.Value = 0
     else:

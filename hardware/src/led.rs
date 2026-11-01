@@ -2,7 +2,7 @@
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::IntoStorage};
 
-use crate::mcu::{set_field, GPIOB, GPIOC};
+use crate::mcu::{GPIOB, GPIOC, ahb_frequency, set_alternate_function, set_field};
 
 const PERIOD: u16 = 58;
 
@@ -23,7 +23,9 @@ impl Led {
         rcc.apb1lrstr().modify(|_, w| w.tim3rst().set_bit());
         rcc.apb1lrstr().modify(|_, w| w.tim3rst().clear_bit());
 
-        timer.psc().write(|w| unsafe { w.bits(2047) });
+        timer
+            .psc()
+            .write(|w| unsafe { w.bits(2048 * (ahb_frequency() / 1_000_000) / 135 - 1) });
         timer
             .arr()
             .write(|w| unsafe { w.bits(u32::from(PERIOD - 1)) });
@@ -43,7 +45,7 @@ impl Led {
             set_field(port, 0x04, pin, 1, 0);
             set_field(port, 0x08, pin * 2, 2, 0);
             set_field(port, 0x0C, pin * 2, 2, 0);
-            set_field(port, if pin < 8 { 0x20 } else { 0x24 }, (pin % 8) * 4, 4, 2);
+            set_alternate_function(port, pin, 2);
             set_field(port, 0x00, pin * 2, 2, 3);
         }
 

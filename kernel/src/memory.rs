@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, ops::Range};
 use cortex_m::interrupt::Mutex;
 use librecalc_abi::Error;
 
@@ -10,11 +10,10 @@ struct Allocation {
 }
 
 pub const PAGE_SIZE: usize = 4096;
-pub const PAGE_COUNT: usize = 48;
+pub const PAGE_COUNT: usize = 124;
 
 struct Memory {
-    start: usize,
-    end: usize,
+    regions: [Range<usize>; 6],
     allocations: [Option<Allocation>; PAGE_COUNT],
 }
 
@@ -34,19 +33,39 @@ pub fn init() {
         0,
         "start addr must be aligned to page size"
     );
+
+    let regions = [
+        start..end,               // AXI SRAM above the kernel
+        0x2000_0000..0x2002_0000, // DTCM
+        0x0000_1000..0x0001_0000, // ITCM, without page 0 so no allocation is a null pointer
+        0x3000_0000..0x3000_8000, // SRAM1, SRAM2
+        0x3800_0000..0x3800_4000, // SRAM4
+        0x3880_0000..0x3880_1000, // Backup SRAM
+    ];
     assert_eq!(
-        end.checked_sub(start),
-        Some(PAGE_SIZE * PAGE_COUNT),
-        "memory region must be exactly {} bytes",
+        regions.iter().map(|region| region.len()).sum::<usize>(),
+        PAGE_SIZE * PAGE_COUNT,
+        "memory regions must be exactly {} bytes",
         PAGE_SIZE * PAGE_COUNT
     );
+
+    n0120_hardware::enable_backup_sram();
+    // Fail at boot rather than in some later alloc if a block is missing or mirrored.
+    for region in &regions {
+        for address in region.clone().step_by(4) {
+            unsafe { (address as *mut u32).write_volatile(address as u32) };
+        }
+        for address in region.clone().step_by(4) {
+            let word = unsafe { (address as *const u32).read_volatile() };
+            assert_eq!(word, address as u32, "RAM test failed at {address:#010x}");
+        }
+    }
 
     cortex_m::interrupt::free(|cs| {
         let mut memory = MEMORY.borrow(cs).borrow_mut();
         assert!(memory.is_none(), "memory already initialized");
         *memory = Some(Memory {
-            start,
-            end,
+            regions,
             allocations: core::array::from_fn(|_| None),
         });
     });
@@ -72,7 +91,13 @@ pub fn alloc(owner: u32, size: usize) -> Result<usize, Error> {
             .position(|entry| entry.is_none())
             .ok_or(Error::ENOMEM)?;
 
-        for address in (memory.start..=memory.end - capacity).step_by(PAGE_SIZE) {
+        let candidates = memory
+            .regions
+            .iter()
+            .filter(|region| region.len() >= capacity)
+            .flat_map(|region| (region.start..=region.end - capacity).step_by(PAGE_SIZE));
+
+        for address in candidates {
             let candidate_end = address + capacity;
 
             let overlaps = memory.allocations.iter().flatten().any(|allocation| {

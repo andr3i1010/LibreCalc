@@ -79,10 +79,6 @@ unsafe extern "C" fn svc_entry() {
         "ite eq",
         "mrseq r0, MSP",
         "mrsne r0, PSP",
-        "tst lr, #16",
-        "bne 2f",
-        "add r0, r0, #72",
-        "2:",
         "b {dispatch}",
         dispatch = sym dispatch,
     );

@@ -6,7 +6,8 @@ MEMORY
   FLASH    : ORIGIN = 0x90000400, LENGTH = 0x3DFC00
   RAM      : ORIGIN = 0x24000000, LENGTH = 56K
   STACK    : ORIGIN = 0x2400E000, LENGTH = 8K
-  USER_RAM : ORIGIN = 0x24010000, LENGTH = 192K
+  /* The rest of AXI SRAM. src/memory.rs adds the blocks the linker never places anything in. */
+  USER_RAM : ORIGIN = 0x24010000, LENGTH = 256K
 }
 
 _stack_start = ORIGIN(STACK) + LENGTH(STACK);

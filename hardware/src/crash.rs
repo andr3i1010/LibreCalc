@@ -15,7 +15,8 @@ use embedded_graphics::{
 use crate::{Console, Display};
 
 const BODY: Rectangle = Rectangle::new(Point::new(0, 19), Size::new(320, 221));
-const RAM_END: u32 = 0x2404_0000;
+// DTCM and AXI SRAM, where the kernel and bootloader stacks live
+const STACK_RAM: [core::ops::Range<u32>; 2] = [0x2000_0000..0x2002_0000, 0x2400_0000..0x2405_0000];
 const TRACE_ADDRESSES: usize = 12;
 
 #[panic_handler]
@@ -86,11 +87,14 @@ unsafe fn HardFault(frame: &ExceptionFrame) -> ! {
 fn scan_stack(sp: u32) -> ([u32; TRACE_ADDRESSES], usize) {
     let mut trace = [0; TRACE_ADDRESSES];
     let mut len = 0;
-    if !(0x2400_0000..RAM_END).contains(&sp) || sp & 3 != 0 {
+    let Some(ram) = STACK_RAM.iter().find(|ram| ram.contains(&sp)) else {
+        return (trace, len);
+    };
+    if sp & 3 != 0 {
         return (trace, len);
     }
 
-    for offset in 0..(((RAM_END - sp) / 4) as usize).min(96) {
+    for offset in 0..(((ram.end - sp) / 4) as usize).min(96) {
         let value = unsafe { read_volatile((sp as *const u32).add(offset)) };
         let address = value & !1;
         if !(0x0800_0400..0x0808_0000).contains(&address)

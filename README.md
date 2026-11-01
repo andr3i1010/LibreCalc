@@ -13,7 +13,6 @@ NumWorks N0120 calculator.
 
 - Rustup
 - GNU Make
-- GNU Arm Embedded tools (`arm-none-eabi-objcopy` and `arm-none-eabi-size`)
 - Python 3 (emulator)
 - Renode (tested with 1.16.1) (emulator)
 - Qt 6 development files and `qmake6` (emulator)
@@ -52,7 +51,8 @@ make run-panel
 ```
 
 This uses `emulator/state` for persistent virtual flash and installs the current
-bootloader and LibreCalc kernel in Slot A. Slot B and saved data are preserved.
+bootloader and LibreCalc kernel at their linked addresses. Other external flash
+contents and saved data are preserved.
 
 If Renode is not on `PATH`, set it explicitly:
 

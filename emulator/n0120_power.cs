@@ -71,7 +71,7 @@ namespace Antmicro.Renode.Peripherals
                 return;
             }
             regs[0x24 >> 2] |= 1;
-            machine.SystemBus.GetCPUs().OfType<Arm>().Single().SetEventFlag(true);
+            machine.SystemBus.GetCPUs().OfType<Arm>().Single().SetEventFlag();
         }
 
         private readonly Machine machine;

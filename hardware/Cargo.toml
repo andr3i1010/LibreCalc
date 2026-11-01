@@ -10,3 +10,5 @@ cortex-m.workspace = true
 cortex-m-rt.workspace = true
 embedded-graphics.workspace = true
 stm32h7.workspace = true
+synopsys-usb-otg.workspace = true
+usb-device.workspace = true

@@ -4,6 +4,11 @@ use core::ptr::read_volatile;
 #[cfg(target_arch = "arm")]
 use core::{arch::asm, ptr::write_volatile};
 use n0120_hardware::initialize_spi;
+#[cfg(target_arch = "arm")]
+use n0120_hardware::{
+    EPSILON_CPU_MHZ, FAST_CPU_MHZ, initialize_battery, initialize_system, initialize_usb_hardware,
+    restore_pcb_revision,
+};
 
 pub const SLOTS: [u32; 2] = [0x9000_0000, 0x9040_0000];
 
@@ -45,12 +50,20 @@ pub fn boot_slot(base: u32) -> Result<(), &'static str> {
     let reset = unsafe { read_volatile((base + 0x24) as *const u32) };
     let stack_valid = stack & 7 == 0
         && ((0x2000_0000..=0x2002_0000).contains(&stack)
-            || (0x2400_0000..=0x2404_0000).contains(&stack));
+            || (0x2400_0000..=0x2405_0000).contains(&stack));
     if !stack_valid {
         return Err("invalid initial stack pointer");
     }
     if reset & 1 == 0 || !(base + FIRMWARE_START..base + FIRMWARE_LENGTH).contains(&(reset & !1)) {
         return Err("invalid reset address for this slot");
+    }
+    if unsafe { read_volatile((base + 8) as *const u32) } == LIBRECALC_MAGIC {
+        initialize_system(FAST_CPU_MHZ);
+    } else {
+        initialize_system(EPSILON_CPU_MHZ);
+        restore_pcb_revision()?;
+        initialize_battery()?;
+        initialize_usb_hardware();
     }
 
     unsafe {

@@ -5,6 +5,7 @@ machine LoadPlatformDescription @emulator/n0120.repl
 sysbus SetHookAfterPeripheralRead syscfg "if offset == 0x20: value = 0x101"
 sysbus Unregister sramBank1
 sysbus Unregister qspi
+sysbus Unregister usb1
 sysbus Unregister adc3
 sysbus Unregister adcM1S2
 machine LoadPlatformDescription @emulator/n0120_lcd.repl

@@ -10,7 +10,7 @@ use embedded_graphics::{
     prelude::{DrawTarget, Point, RgbColor, Size},
     primitives::Rectangle,
 };
-use n0120_hardware::{Console, Display, initialize_keyboard, initialize_system};
+use n0120_hardware::{Console, Display, FAST_CPU_MHZ, initialize_keyboard, initialize_system};
 mod memory;
 mod process;
 mod svc;
@@ -31,8 +31,9 @@ static IMAGE_VERSION: [u8; 8] = {
 
 #[entry]
 fn main() -> ! {
-    initialize_system();
-    initialize_keyboard();
+    let mut core = cortex_m::Peripherals::take().unwrap();
+    core.SCB.enable_icache();
+    initialize_system(FAST_CPU_MHZ);
 
     let mut display = Display::new();
     display.clear(Rgb565::BLACK).unwrap();
@@ -42,11 +43,20 @@ fn main() -> ! {
         Rgb565::WHITE,
         Rgb565::BLACK,
     );
-    writeln!(console, "LibreCalc kernel {}", env!("CARGO_PKG_VERSION")).unwrap();
+    let mut buffer = [0; 16];
+    let version = librecalc_abi::os_version(&mut buffer).unwrap();
+    writeln!(console, "LibreCalc Kernel {version}").unwrap();
     writeln!(console, "Initializing memory...").unwrap();
 
     memory::init();
-    writeln!(console, "Memory ready.").unwrap();
+    writeln!(
+        console,
+        "Memory ready: {} KiB free.",
+        memory::PAGE_COUNT * memory::PAGE_SIZE / 1024
+    )
+    .unwrap();
+    core.SCB.enable_dcache(&mut core.CPUID);
+    initialize_keyboard();
 
     let process_id = process::create(memory::PAGE_SIZE).expect("failed to create process");
 
@@ -54,7 +64,6 @@ fn main() -> ! {
 
     writeln!(console, "Created PID: {process_id}").unwrap();
     writeln!(console, "Current PID: {:?}", process::current_id()).unwrap();
-    
 
     loop {
         cortex_m::asm::wfi();

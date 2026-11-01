@@ -2,7 +2,8 @@
 
 BUILD ?= build
 RENODE ?= renode
-CROSS ?= arm-none-eabi-
+SYSROOT := $(shell rustc --print sysroot)
+OBJCOPY := LD_LIBRARY_PATH=$(SYSROOT)/lib $(SYSROOT)/lib/rustlib/$(shell rustc --print host-tuple)/bin/rust-objcopy
 CXX ?= c++
 QT_HEADERS ?= $(shell qmake6 -query QT_INSTALL_HEADERS 2>/dev/null)
 QT_LIBS ?= $(shell qmake6 -query QT_INSTALL_LIBS 2>/dev/null)
@@ -12,7 +13,7 @@ KERNEL_BIN := $(BUILD)/librecalc-kernel.bin
 TRAMPOLINE_BIN := $(BUILD)/librecalc-bootloader-table.bin
 STATE ?= emulator/state
 
-.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-panel test-usb test-lcd test-syscalls
+.PHONY: all help clean bootloader kernel flash-virtual panel run-panel
 
 all: bootloader kernel
 	python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(KERNEL_BIN) $(BUILD)/librecalc.dfu
@@ -23,10 +24,6 @@ help:
 	@echo 'make kernel                  build the kernel artifacts'
 	@echo 'make flash-virtual           write the current build into Renode virtual flash'
 	@echo 'make run-panel               start the local calculator window'
-	@echo 'make test-panel              check and render the calculator window'
-	@echo 'make test-lcd                check final LCD frame delivery'
-	@echo 'make test-usb                check virtual USB registers'
-	@echo 'make test-syscalls           check syscall routing and wrappers'
 	@echo 'make clean                   remove generated files'
 
 $(BUILD):
@@ -35,9 +32,8 @@ $(BUILD):
 bootloader kernel: | $(BUILD)
 	cargo build --release --package librecalc-$@
 	cp target/thumbv7em-none-eabihf/release/librecalc-$@ $(BUILD)/librecalc-$@.elf
-	$(CROSS)size $(BUILD)/librecalc-$@.elf
-	$(CROSS)objcopy -O binary $(if $(filter bootloader,$@),--remove-section=.trampoline,) $(BUILD)/librecalc-$@.elf $(BUILD)/librecalc-$@.bin
-	$(if $(filter bootloader,$@),$(CROSS)objcopy -O binary --only-section=.trampoline $(BUILD)/librecalc-$@.elf $(TRAMPOLINE_BIN),@true)
+	$(OBJCOPY) -O binary $(if $(filter bootloader,$@),--remove-section=.trampoline,) $(BUILD)/librecalc-$@.elf $(BUILD)/librecalc-$@.bin
+	$(if $(filter bootloader,$@),$(OBJCOPY) -O binary --only-section=.trampoline $(BUILD)/librecalc-$@.elf $(TRAMPOLINE_BIN),@true)
 
 flash-virtual: bootloader kernel
 	mkdir -p $(STATE)
@@ -52,7 +48,7 @@ $(BUILD)/librecalc-panel: emulator/panel.cpp | $(BUILD)
 	$(CXX) -std=c++17 -I$(QT_HEADERS) -I$(QT_HEADERS)/QtCore -I$(QT_HEADERS)/QtGui -I$(QT_HEADERS)/QtWidgets -I$(QT_HEADERS)/QtNetwork \
 		emulator/panel.cpp -L$(QT_LIBS) -Wl,-rpath,$(QT_LIBS) -lQt6Widgets -lQt6Network -lQt6Gui -lQt6Core -o $@
 
-run-panel:
+run-panel: panel
 	LIBRECALC_ROOT=$(CURDIR) LIBRECALC_STATE=$(CURDIR)/$(STATE) RENODE=$(RENODE) $(BUILD)/librecalc-panel
 
 clean:
