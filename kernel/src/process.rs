@@ -59,7 +59,7 @@ pub fn create(stack_size: usize) -> Result<u32, Error> {
             stack_end,
             stack_ptr: stack_end,
         });
-        
+
         processes.next_id = next_id;
 
         Ok(id)

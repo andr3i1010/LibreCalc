@@ -13,17 +13,18 @@ KERNEL_BIN := $(BUILD)/librecalc-kernel.bin
 TRAMPOLINE_BIN := $(BUILD)/librecalc-bootloader-table.bin
 STATE ?= emulator/state
 
-.PHONY: all help clean bootloader kernel flash-virtual panel run-panel
+.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-syscalls
 
 all: bootloader kernel
 	python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(KERNEL_BIN) $(BUILD)/librecalc.dfu
 
 help:
 	@echo 'make                         build the bootloader, kernel, and combined DFU'
-	@echo 'make bootloader              build the bootloader artifacts'
+	@echo 'make bootloader              build the bootloader DFU and raw artifacts'
 	@echo 'make kernel                  build the kernel artifacts'
 	@echo 'make flash-virtual           write the current build into Renode virtual flash'
 	@echo 'make run-panel               start the local calculator window'
+	@echo 'make test-syscalls           run syscall tests on the host'
 	@echo 'make clean                   remove generated files'
 
 $(BUILD):
@@ -34,6 +35,7 @@ bootloader kernel: | $(BUILD)
 	cp target/thumbv7em-none-eabihf/release/librecalc-$@ $(BUILD)/librecalc-$@.elf
 	$(OBJCOPY) -O binary $(if $(filter bootloader,$@),--remove-section=.trampoline,) $(BUILD)/librecalc-$@.elf $(BUILD)/librecalc-$@.bin
 	$(if $(filter bootloader,$@),$(OBJCOPY) -O binary --only-section=.trampoline $(BUILD)/librecalc-$@.elf $(TRAMPOLINE_BIN),@true)
+	$(if $(filter bootloader,$@),python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(BUILD)/librecalc-bootloader.dfu,@true)
 
 flash-virtual: bootloader kernel
 	mkdir -p $(STATE)
@@ -53,3 +55,6 @@ run-panel: panel
 
 clean:
 	rm -rf -- build target
+
+test-syscalls:
+	cargo test --package librecalc-abi --target $(shell rustc --print host-tuple)

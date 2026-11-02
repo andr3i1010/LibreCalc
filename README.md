@@ -31,10 +31,27 @@ This creates:
 
 - `build/librecalc-bootloader.{elf,bin}`
 - `build/librecalc-bootloader-table.bin`
+- `build/librecalc-bootloader.dfu`, containing the bootloader and its matching Epsilon call table.
 - `build/librecalc-kernel.{elf,bin}`
 - `build/librecalc.dfu`, containing all three images.
 
 Build only one program with `make bootloader` or `make kernel`.
+
+Use `build/librecalc-bootloader.dfu` to update the bootloader and call table together
+while keeping the external firmware.
+
+Older bootloaders reject the call-table erase at `0x0807FC00`. To update one:
+
+1. In DFU mode, install the new body:
+   ```sh
+   dfu-util -d 0483:a291 -a 0 -s 0x08000000 -D build/librecalc-bootloader.bin
+   ```
+2. Press BACK and select DFU again so the new erase handler runs.
+3. Install the complete bootloader image:
+   ```sh
+   dfu-util -d 0483:a291 -a 0 -D build/librecalc-bootloader.dfu
+   ```
+4. After both elements finish downloading, press BACK to reboot.
 
 Fast Rust checks use Cargo directly:
 
@@ -42,6 +59,12 @@ Fast Rust checks use Cargo directly:
 cargo fmt --all --check
 cargo check --workspace
 cargo clippy --workspace -- -D warnings
+```
+
+Run the syscall tests on the host with:
+
+```sh
+make test-syscalls
 ```
 
 ## Emulator

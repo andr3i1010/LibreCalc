@@ -15,6 +15,9 @@ mod memory;
 mod process;
 mod svc;
 
+#[global_allocator]
+static ALLOCATOR: memory::KernelAllocator = memory::KernelAllocator;
+
 #[used]
 #[unsafe(link_section = ".image_header.version")]
 static IMAGE_VERSION: [u8; 8] = {
@@ -43,12 +46,12 @@ fn main() -> ! {
         Rgb565::WHITE,
         Rgb565::BLACK,
     );
-    let mut buffer = [0; 16];
-    let version = librecalc_abi::os_version(&mut buffer).unwrap();
-    writeln!(console, "LibreCalc Kernel {version}").unwrap();
     writeln!(console, "Initializing memory...").unwrap();
 
     memory::init();
+    let version = librecalc_abi::os_version().unwrap();
+    writeln!(console, "LibreCalc Kernel {version}").unwrap();
+    drop(version);
     writeln!(
         console,
         "Memory ready: {} KiB free.",

@@ -22,7 +22,6 @@ struct Flash<const RECOVERY: bool> {
     stored: usize,
 }
 
-// Last external flash failure, shown on screen by the DFU loop (DFUClass hides the Flash).
 static FAILURE: Mutex<Cell<Option<(&'static str, u32)>>> = Mutex::new(Cell::new(None));
 
 fn report(error: &'static str, address: u32) {
@@ -36,9 +35,10 @@ impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
     } else {
         "@Flash/0x08000000/04*128Kg/0x90000000/08*004Kg,01*032Kg,127*064Kg"
     };
-    const PROGRAM_TIME_MS: u32 = 10;
-    const ERASE_TIME_MS: u32 = 5000;
-    const FULL_ERASE_TIME_MS: u32 = 5000;
+    // Required for DFUMemIO, do not remove!
+    const PROGRAM_TIME_MS: u32 = 1;
+    const ERASE_TIME_MS: u32 = 1;
+    const FULL_ERASE_TIME_MS: u32 = 1;
 
     fn read(&mut self, address: u32, length: usize) -> Result<&[u8], DFUMemError> {
         let end = address

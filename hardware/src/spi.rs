@@ -1,7 +1,11 @@
 use core::ptr::{read_volatile, write_volatile};
+use cortex_m::peripheral::{DCB, DWT};
 use stm32h7::stm32h725;
 
-use crate::mcu::{FAST_CPU_MHZ, GPIOB, GPIOD, GPIOJ, delay_us, set_alternate_function, set_field};
+use crate::mcu::{
+    EPSILON_CPU_MHZ, GPIOB, GPIOD, GPIOJ, ahb_frequency, delay_us, set_alternate_function,
+    set_field,
+};
 
 pub const EXTERNAL_FLASH_START: u32 = 0x9000_0000;
 pub const EXTERNAL_FLASH_END: u32 = 0x9080_0000;
@@ -203,18 +207,27 @@ fn read_byte_command(instruction: u8) -> Result<u8, &'static str> {
 }
 
 fn wait_flash_ready<const BOOTLOADER: bool>() -> Result<(), &'static str> {
-    for _ in 0..10_000 {
+    // The singleton API writes bootloader RAM that Epsilon may have reused.
+    unsafe {
+        (*DCB::PTR).demcr.modify(|r| r | 1 << 24);
+        DWT::unlock();
+        (*DWT::PTR).ctrl.modify(|r| r | 1);
+    }
+    let timeout = if BOOTLOADER {
+        ahb_frequency() * 2 * 5
+    } else {
+        // Epsilon reuses bootloader RAM; its maximum CPU rate gives at least five seconds.
+        EPSILON_CPU_MHZ * 5_000_000
+    };
+    let start = DWT::cycle_count();
+    loop {
         if read_byte_command(0x05)? & 1 == 0 {
             return Ok(());
         }
-        if BOOTLOADER {
-            delay_us(500);
-        } else {
-            // Keep the minimum delay without reading LibreCalc's old CPU_MHZ.
-            cortex_m::asm::delay(FAST_CPU_MHZ * 500);
+        if DWT::cycle_count().wrapping_sub(start) >= timeout {
+            return Err("external flash stayed busy");
         }
     }
-    Err("external flash stayed busy")
 }
 
 // Older Epsilon/Upsilon builds lock slots (BP/TB/SEC, CMP) and the flash then silently ignores

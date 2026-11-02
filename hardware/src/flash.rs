@@ -15,11 +15,11 @@ const METADATA_END: u32 = 0x0807_FC00;
 const ERRORS: u32 = 0x07EE_0000;
 
 pub fn erase_internal_flash(address: u32) -> Result<(), ()> {
-    if !(INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address)
-        || !address.is_multiple_of(SECTOR_SIZE)
-    {
+    if !(INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address) {
         return Err(());
     }
+    // DfuSe sends an address inside the sector, not necessarily its start.
+    let address = address & !(SECTOR_SIZE - 1);
     let metadata = unsafe { read_volatile(METADATA_START as *const [u8; 512]) };
     unlock()?;
     let flash = unsafe { &*FLASH::ptr() };

@@ -1,4 +1,8 @@
-use core::{cell::RefCell, ops::Range};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    cell::RefCell,
+    ops::Range,
+};
 use cortex_m::interrupt::Mutex;
 use librecalc_abi::Error;
 
@@ -7,6 +11,7 @@ struct Allocation {
     address: usize,
     size: usize,
     capacity: usize,
+    heap: bool,
 }
 
 pub const PAGE_SIZE: usize = 4096;
@@ -72,8 +77,19 @@ pub fn init() {
 }
 
 pub fn alloc(owner: u32, size: usize) -> Result<usize, Error> {
+    if owner == 0 {
+        return Err(Error::EINVAL);
+    }
+    allocate(owner, size, false)
+}
+
+pub fn alloc_heap(owner: u32, size: usize) -> Result<usize, Error> {
+    allocate(owner, size, true)
+}
+
+fn allocate(owner: u32, size: usize, heap: bool) -> Result<usize, Error> {
     with_memory(|memory| {
-        if size == 0 || owner == 0 {
+        if size == 0 {
             return Err(Error::EINVAL);
         }
 
@@ -119,6 +135,7 @@ pub fn alloc(owner: u32, size: usize) -> Result<usize, Error> {
                 address,
                 size,
                 capacity,
+                heap,
             });
             return Ok(address);
         }
@@ -129,7 +146,7 @@ pub fn alloc(owner: u32, size: usize) -> Result<usize, Error> {
 
 pub fn free(owner: u32, address: usize) -> Result<(), Error> {
     with_memory(|memory| {
-        if owner == 0 || address == 0 {
+        if address == 0 {
             return Err(Error::EINVAL);
         }
 
@@ -143,7 +160,7 @@ pub fn free(owner: u32, address: usize) -> Result<(), Error> {
             .ok_or(Error::EINVAL)?;
 
         match &memory.allocations[slot] {
-            Some(allocation) if allocation.owner == owner => {
+            Some(allocation) if allocation.owner == owner && allocation.heap => {
                 memory.allocations[slot] = None;
                 Ok(())
             }
@@ -154,10 +171,10 @@ pub fn free(owner: u32, address: usize) -> Result<(), Error> {
 
 /// Release all allocations belonging to a process during cleanup.
 pub fn free_by_owner(owner: u32) -> Result<(), Error> {
+    if owner == 0 {
+        return Err(Error::EINVAL);
+    }
     with_memory(|memory| {
-        if owner == 0 {
-            return Err(Error::EINVAL);
-        }
         for slot in 0..memory.allocations.len() {
             match &memory.allocations[slot] {
                 Some(allocation) if allocation.owner == owner => memory.allocations[slot] = None,
@@ -166,6 +183,19 @@ pub fn free_by_owner(owner: u32) -> Result<(), Error> {
         }
         Ok(())
     })
+}
+
+pub struct KernelAllocator;
+
+unsafe impl GlobalAlloc for KernelAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // shortcut: heap blocks use whole pages; add suballocation when app workloads need it.
+        unsafe { librecalc_abi::heap::allocate(layout, |size| alloc_heap(0, size as usize)) }
+    }
+
+    unsafe fn dealloc(&self, address: *mut u8, _: Layout) {
+        let _ = free(0, unsafe { librecalc_abi::heap::allocation_base(address) });
+    }
 }
 
 fn with_memory<R>(operation: impl FnOnce(&mut Memory) -> R) -> R {
