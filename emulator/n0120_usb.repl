@@ -1,8 +1,0 @@
-// SPDX-License-Identifier: GPL-3.0-only
-// STM32H725 OTG-HS device controller used by the N0120's EP0-only USB stack.
-
-n0120Usb1OtgHs: N0120UsbOtgHs @ sysbus 0x40040000
-    preinit:
-        include @n0120_usb.cs
-    0 -> nvic@77
-    1 -> gpioPortA@9
