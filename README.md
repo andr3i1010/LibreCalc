@@ -17,10 +17,7 @@ If you want to install LibreCalc using SWD, check https://blog.ayabusa.dev/2025/
 
 - Rustup
 - GNU Make
-- Python 3 (emulator)
-- Renode (tested with 1.16.1) (emulator)
-- Qt 6 development files and `qmake6` (emulator)
-- Optional virtual USB on Linux: `usbip` and `pkexec` (emulator)
+- Python 3
 
 Rustup reads `rust-toolchain.toml` and installs the pinned compiler, formatter,
 linter, editor engine, and Cortex-M target.
