@@ -3,6 +3,11 @@
 LibreCalc is an experimental, independent operating system project for the
 NumWorks N0120 calculator.
 
+## Installation
+You need an exploit like [Wirehax](https://github.com/numcrack/wirehax) to unlock the stock bootloader and overwrite it with LibreCalc.
+
+If you want to install LibreCalc using SWD, check https://blog.ayabusa.dev/2025/11/07/lets-create-an-os-for-the-numworks-a-different-approach-part-2/
+
 ## Workspace
 - `bootloader/` is the bootloader that lives in the internal flash. Its goal is to boot the kernel from external flash, and to provide a DFU interface for flashing.
 - `kernel/` is the kernel that lives in the external flash. It is responsible for providing safe access to the hardware for the userspace.
@@ -59,28 +64,6 @@ cargo fmt --all --check
 cargo check --workspace
 cargo clippy --workspace -- -D warnings
 ```
-
-## Emulator
-
-```sh
-make run-panel
-```
-
-This uses `emulator/state` for persistent virtual flash and installs the current
-bootloader and LibreCalc kernel at their linked addresses. Other external flash
-contents and saved data are preserved.
-
-If Renode is not on `PATH`, set it explicitly:
-
-```sh
-RENODE=/path/to/renode make run-panel
-```
-
-Set `STATE=/path/to/state` on the `make` command to use another virtual-flash
-directory.
-
-Cargo stores compiler intermediates in `target/`. Final firmware images,
-ELFs with debug symbols, and emulator outputs go in `build/`.
 
 ## License
 
