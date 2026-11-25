@@ -10,13 +10,12 @@ use embedded_graphics::{
     prelude::{DrawTarget, Point, RgbColor, Size},
     primitives::Rectangle,
 };
-use n0120_hardware::{Console, Display, FAST_CPU_MHZ, initialize_keyboard, initialize_system};
+use n0120_hardware::{
+    Console, Display, FAST_CPU_MHZ, initialize_keyboard, initialize_system, initialize_timer,
+};
 mod memory;
 mod process;
 mod svc;
-
-#[global_allocator]
-static ALLOCATOR: memory::KernelAllocator = memory::KernelAllocator;
 
 #[used]
 #[unsafe(link_section = ".image_header.version")]
@@ -49,9 +48,10 @@ fn main() -> ! {
     writeln!(console, "Initializing memory...").unwrap();
 
     memory::init();
-    let version = librecalc_abi::os_version().unwrap();
-    writeln!(console, "LibreCalc Kernel {version}").unwrap();
-    drop(version);
+    let (mut os, mut abi) = ([0; 16], [0; 16]);
+    let version = librecalc_abi::os_version(&mut os).unwrap();
+    let abi = librecalc_abi::abi_version(&mut abi).unwrap();
+    writeln!(console, "LibreCalc Kernel {version} (ABI {abi})").unwrap();
     writeln!(
         console,
         "Memory ready: {} KiB free.",
@@ -60,15 +60,10 @@ fn main() -> ! {
     .unwrap();
     core.SCB.enable_dcache(&mut core.CPUID);
     initialize_keyboard();
+    initialize_timer();
+    process::init();
 
-    let process_id = process::create(memory::PAGE_SIZE).expect("failed to create process");
-
-    assert_eq!(process_id, 1);
-
-    writeln!(console, "Created PID: {process_id}").unwrap();
-    writeln!(console, "Current PID: {:?}", process::current_id()).unwrap();
-
-    loop {
-        cortex_m::asm::wfi();
-    }
+    writeln!(console, "Starting home...").unwrap();
+    let _ = librecalc_abi::exit(0);
+    unreachable!("exit returned to the boot thread")
 }

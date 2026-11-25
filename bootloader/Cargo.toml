@@ -10,6 +10,7 @@ build = "../build.rs"
 cortex-m.workspace = true
 cortex-m-rt = { workspace = true, features = ["set-vtor"] }
 embedded-graphics.workspace = true
+embedded-sprites-macro.workspace = true
 n0120-hardware.workspace = true
 stm32h7.workspace = true
 usb-device.workspace = true

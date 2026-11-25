@@ -10,25 +10,19 @@ mod epsilon_compat;
 use core::fmt::Write;
 use cortex_m_rt::entry;
 use embedded_graphics::{
-    image::{Image, ImageRawLE},
     mono_font::{MonoTextStyle, ascii::FONT_9X18},
-    pixelcolor::Rgb565,
+    pixelcolor::{Rgb565, raw::RawU16},
     prelude::{DrawTarget, Drawable, Point, RgbColor, Size},
     primitives::Rectangle,
     text::Text,
 };
+use embedded_sprites_macro::include_png_as_rgb565;
 use n0120_hardware::{
-    Backlight, 
-    Console, 
-    Display, 
-    Key, 
-    Led, 
-    STOCK_CPU_MHZ, 
-    initialize_keyboard, 
-    initialize_system, 
+    Backlight, Console, Display, Key, Led, STOCK_CPU_MHZ, initialize_keyboard, initialize_system,
     read_keyboard,
 };
 
+// DO NOT REMOVE!!!!!!!! it WILL brick your calculator (from experience)
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 #[unsafe(link_section = ".Reset")]
@@ -84,10 +78,12 @@ fn main() -> ! {
         .modify(|r, w| unsafe { w.bits((r.bits() & !(3 << 16)) | (1 << 16)) });
     cortex_m::asm::delay(4096);
     rows.bsrr().write(|w| unsafe { w.bits(1 << 8) });
-    if columns.idr().read().bits() & (1 << 11) == 0 { //Key 6
+    if columns.idr().read().bits() & (1 << 11) == 0 {
+        //Key 6
         dfu::recovery();
         // Recovery is a backup feature in case if initialization of the hardware fails
-        // You can still unbrick your unit by holding 6 at boot
+        // You can still unbrick your unit by holding 6 at boot, if any code past this point fails.
+        // If any code before this point fails, good luck soldering an SWD: https://blog.ayabusa.dev/2025/11/07/lets-create-an-os-for-the-numworks-a-different-approach-part-2/
     }
 
     initialize_system(STOCK_CPU_MHZ);
@@ -106,12 +102,18 @@ fn main() -> ! {
     let mut previous_keys = read_keyboard();
     loop {
         display.clear(Rgb565::BLACK).unwrap();
-        Image::new(
-            &ImageRawLE::<Rgb565>::new(&include_bytes!("../assets/smiley.bmp")[70..], 64),
-            Point::new(248, 8),
-        )
-        .draw(&mut display)
-        .unwrap();
+        display
+            .fill_contiguous(
+                &Rectangle::new(Point::new(25, 24), Size::new(48, 48)),
+                include_png_as_rgb565!("assets/logo.png").map(|p| Rgb565::from(RawU16::new(p))),
+            )
+            .unwrap();
+        display
+            .fill_contiguous(
+                &Rectangle::new(Point::new(83, 32), Size::new(211, 32)),
+                include_png_as_rgb565!("assets/text.png").map(|p| Rgb565::from(RawU16::new(p))),
+            )
+            .unwrap();
         for (row, label) in items.into_iter().enumerate() {
             let mut position = Text::new(label, Point::new(34, 114 + row as i32 * 24), style)
                 .draw(&mut display)

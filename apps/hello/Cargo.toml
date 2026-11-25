@@ -1,0 +1,18 @@
+[package]
+name = "librecalc-hello"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+test = false
+bench = false
+
+[features]
+# Ends with a read of kernel RAM, which the MPU must stop.
+crash = []
+
+[dependencies]
+librecalc-abi.workspace = true

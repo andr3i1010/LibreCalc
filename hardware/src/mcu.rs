@@ -255,7 +255,6 @@ pub fn initialize_system(mhz: u32) {
     set_field(GPIOD, 0x08, BACKLIGHT_PIN * 2, 2, 1); // Medium speed.
 }
 
-// Separate from initialize_system, which also runs before Epsilon: it must keep the reset state.
 pub fn enable_backup_sram() {
     let rcc = unsafe { &*stm32h725::RCC::ptr() };
     let pwr = unsafe { &*stm32h725::PWR::ptr() };

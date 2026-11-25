@@ -6,13 +6,15 @@ import sys
 import zlib
 from pathlib import Path
 
-assert len(sys.argv) in (4, 5), "Usage: pack_dfu.py BOOTLOADER TABLE [KERNEL] OUTPUT"
+assert len(sys.argv) in (4, 5, 6), "Usage: pack_dfu.py BOOTLOADER TABLE [KERNEL [APPS]] OUTPUT"
 bootloader, trampoline, *kernel, output = map(Path, sys.argv[1:])
 assert bootloader.stat().st_size <= 0x7FA00
 assert trampoline.stat().st_size == 13 * 4
-assert all(path.stat().st_size <= 0x3F0000 for path in kernel)
+# The kernel's slot holds 1 MiB of kernel, then the apps up to the end of the 4 MiB slot.
+for path, limit in zip(kernel, (0x100000, 0x300000)):
+    assert path.stat().st_size <= limit, f"{path} is too large"
 elements = b""
-for address, path in zip((0x08000000, 0x0807FC00, 0x90000000), (bootloader, trampoline, *kernel)):
+for address, path in zip((0x08000000, 0x0807FC00, 0x90000000, 0x90100000), (bootloader, trampoline, *kernel)):
     data = path.read_bytes()
     elements += struct.pack("<II", address, len(data)) + data
 

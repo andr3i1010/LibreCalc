@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #![no_std]
-
-extern crate alloc;
-
 mod status;
 pub use status::Error;
 
-pub mod heap;
-#[doc(hidden)]
-pub mod transport;
-pub use alloc::string::String;
-pub use heap::AppAllocator;
+pub mod app;
+pub use app::{AppAllocator, AppHeader};
+pub mod syscalls;
+pub use syscalls::Rect;
+crate::syscall_definitions!(app_calls);
 
-mod functions;
-mod macros;
-crate::syscall_definitions!(clients);
+fn call(number: u32, [a0, a1, a2, a3]: [u32; 4]) -> Result<u64, Error> {
+    let (status, low, high): (i32, u32, u32);
+    unsafe {
+        core::arch::asm!(
+            "svc 0",
+            in("r12") number,
+            inlateout("r0") a0 => status,
+            inlateout("r1") a1 => low,
+            inlateout("r2") a2 => high,
+            in("r3") a3,
+        );
+    }
+    match status {
+        0 => Ok(u64::from(low) | u64::from(high) << 32),
+        error => Err(Error::from_code(error)),
+    }
+}

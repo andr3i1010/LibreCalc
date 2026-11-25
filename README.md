@@ -1,13 +1,12 @@
 # LibreCalc
 
-LibreCalc is an experimental, independent operating-system project for the
+LibreCalc is an experimental, independent operating system project for the
 NumWorks N0120 calculator.
 
 ## Workspace
 - `bootloader/` is the bootloader that lives in the internal flash. Its goal is to boot the kernel from external flash, and to provide a DFU interface for flashing.
 - `kernel/` is the kernel that lives in the external flash. It is responsible for providing safe access to the hardware for the userspace.
 - `hardware/` is the shared hardware library.
-- `emulator/` contains the Renode model and calculator panel.
 
 ## Requirements
 
@@ -35,7 +34,7 @@ This creates:
 - `build/librecalc-kernel.{elf,bin}`
 - `build/librecalc.dfu`, containing all three images.
 
-Build only one program with `make bootloader` or `make kernel`.
+Build only the bootloader with `make bootloader`, or builtin apps + the kernel with `make kernel`.
 
 Use `build/librecalc-bootloader.dfu` to update the bootloader and call table together
 while keeping the external firmware.
@@ -59,12 +58,6 @@ Fast Rust checks use Cargo directly:
 cargo fmt --all --check
 cargo check --workspace
 cargo clippy --workspace -- -D warnings
-```
-
-Run the syscall tests on the host with:
-
-```sh
-make test-syscalls
 ```
 
 ## Emulator

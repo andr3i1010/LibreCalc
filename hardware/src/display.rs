@@ -5,12 +5,12 @@ use core::{
     ptr::{read_volatile, write_volatile},
 };
 use embedded_graphics::{
-    pixelcolor::Rgb565,
+    pixelcolor::{Rgb565, raw::RawU16},
     prelude::{DrawTarget, IntoStorage, OriginDimensions, Pixel, Point, PointsIter, Size},
     primitives::Rectangle,
 };
 
-use crate::mcu::delay_us;
+use crate::mcu::{GPIOB, delay_us};
 
 const DISPLAY_AREA: Rectangle = Rectangle::new(Point::zero(), Size::new(320, 240));
 
@@ -110,6 +110,35 @@ const GAMMA: [[u8; 14]; 7] = [
         0xF0, 0x08, 0x0C, 0x0B, 0x09, 0x23, 0x31, 0x33, 0x47, 0x37, 0x14, 0x14, 0x2C, 0x32,
     ],
 ];
+
+/// Draws RGB565 `pixels`, row by row, into a rectangle; whatever falls off-screen is skipped.
+pub fn push_rect(x: u16, y: u16, width: u16, height: u16, pixels: impl IntoIterator<Item = u16>) {
+    let area = Rectangle::new(
+        Point::new(x.into(), y.into()),
+        Size::new(width.into(), height.into()),
+    );
+    let colors = pixels.into_iter().map(|pixel| RawU16::new(pixel).into());
+    let _ = Display.fill_contiguous(&area, colors);
+}
+
+pub fn fill_rect(x: u16, y: u16, width: u16, height: u16, color: u16) {
+    push_rect(x, y, width, height, core::iter::repeat(color));
+}
+
+/// Waits up to 50 ms for the panel to start a refresh, signalled by its tearing-effect line (PB1)
+/// going high; writing right after that stays ahead of the refresh, so nothing tears.
+pub fn wait_for_vblank() -> bool {
+    let high = || unsafe { read_volatile((GPIOB + 0x10) as *const u32) } & 1 << 1 != 0;
+    let start = crate::micros();
+    let mut was_low = false;
+    while crate::micros() - start < 50_000 {
+        if was_low && high() {
+            return true;
+        }
+        was_low |= !high();
+    }
+    false
+}
 
 impl OriginDimensions for Display {
     fn size(&self) -> Size {

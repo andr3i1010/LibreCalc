@@ -9,6 +9,7 @@ use crate::mcu::{GPIOC, delay_us, set_field};
 
 pub const INTERNAL_FLASH_START: u32 = 0x0800_0000;
 pub const INTERNAL_FLASH_END: u32 = 0x0808_0000;
+
 const SECTOR_SIZE: u32 = 128 * 1024;
 const METADATA_START: u32 = 0x0807_FA00;
 const METADATA_END: u32 = 0x0807_FC00;

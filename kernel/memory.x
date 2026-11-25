@@ -3,20 +3,18 @@
 MEMORY
 {
   HEADER   : ORIGIN = 0x90000000, LENGTH = 0x400
-  FLASH    : ORIGIN = 0x90000400, LENGTH = 0x3DFC00
-  RAM      : ORIGIN = 0x24000000, LENGTH = 56K
-  STACK    : ORIGIN = 0x2400E000, LENGTH = 8K
-  /* The rest of AXI SRAM. src/memory.rs adds the blocks the linker never places anything in. */
-  USER_RAM : ORIGIN = 0x24010000, LENGTH = 256K
+  FLASH    : ORIGIN = 0x90000400, LENGTH = 0xFFC00
+  RAM      : ORIGIN = 0x20000000, LENGTH = 56K
+  STACK    : ORIGIN = 0x2000E000, LENGTH = 8K
 }
 
 _stack_start = ORIGIN(STACK) + LENGTH(STACK);
 _stack_end = ORIGIN(STACK);
 
 ASSERT(ORIGIN(RAM) + LENGTH(RAM) <= ORIGIN(STACK), "kernel RAM overlaps kernel stack");
-ASSERT(ORIGIN(STACK) + LENGTH(STACK) <= ORIGIN(USER_RAM), "kernel stack overlaps userspace RAM");
-_user_ram_start = ORIGIN(USER_RAM);
-_user_ram_end = ORIGIN(USER_RAM) + LENGTH(USER_RAM);
+ASSERT(ORIGIN(STACK) + LENGTH(STACK) <= 0x20010000, "kernel outgrew its 64 KiB of DTCM");
+
+PROVIDE(__app_header = 0);
 
 /* Leave one aligned KiB for the STM32H725 vector table. */
 _stext = ORIGIN(FLASH) + 0x400;

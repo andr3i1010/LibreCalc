@@ -4,6 +4,7 @@ BUILD ?= build
 RENODE ?= renode
 SYSROOT := $(shell rustc --print sysroot)
 OBJCOPY := LD_LIBRARY_PATH=$(SYSROOT)/lib $(SYSROOT)/lib/rustlib/$(shell rustc --print host-tuple)/bin/rust-objcopy
+LLD := LD_LIBRARY_PATH=$(SYSROOT)/lib $(SYSROOT)/lib/rustlib/$(shell rustc --print host-tuple)/bin/rust-lld -flavor gnu
 CXX ?= c++
 QT_HEADERS ?= $(shell qmake6 -query QT_INSTALL_HEADERS 2>/dev/null)
 QT_LIBS ?= $(shell qmake6 -query QT_INSTALL_LIBS 2>/dev/null)
@@ -11,50 +12,36 @@ QT_LIBS ?= $(shell qmake6 -query QT_INSTALL_LIBS 2>/dev/null)
 BOOTLOADER_BIN := $(BUILD)/librecalc-bootloader.bin
 KERNEL_BIN := $(BUILD)/librecalc-kernel.bin
 TRAMPOLINE_BIN := $(BUILD)/librecalc-bootloader-table.bin
+HOME_BIN := $(BUILD)/home.bin
 STATE ?= emulator/state
 
-.PHONY: all help clean bootloader kernel flash-virtual panel run-panel test-syscalls
+.PHONY: all help clean bootloader kernel flash-virtual panel run-panel
 
 all: bootloader kernel
-	python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(KERNEL_BIN) $(BUILD)/librecalc.dfu
+	python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(KERNEL_BIN) $(HOME_BIN) $(BUILD)/librecalc.dfu
 
 help:
 	@echo 'make                         build the bootloader, kernel, and combined DFU'
 	@echo 'make bootloader              build the bootloader DFU and raw artifacts'
-	@echo 'make kernel                  build the kernel artifacts'
-	@echo 'make flash-virtual           write the current build into Renode virtual flash'
-	@echo 'make run-panel               start the local calculator window'
-	@echo 'make test-syscalls           run syscall tests on the host'
+	@echo 'make kernel                  build home and kernel; CRASH=1 builds the crash test'
 	@echo 'make clean                   remove generated files'
 
 $(BUILD):
 	mkdir -p $@
 
-bootloader kernel: | $(BUILD)
-	cargo build --release --package librecalc-$@
-	cp target/thumbv7em-none-eabihf/release/librecalc-$@ $(BUILD)/librecalc-$@.elf
-	$(OBJCOPY) -O binary $(if $(filter bootloader,$@),--remove-section=.trampoline,) $(BUILD)/librecalc-$@.elf $(BUILD)/librecalc-$@.bin
-	$(if $(filter bootloader,$@),$(OBJCOPY) -O binary --only-section=.trampoline $(BUILD)/librecalc-$@.elf $(TRAMPOLINE_BIN),@true)
-	$(if $(filter bootloader,$@),python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(BUILD)/librecalc-bootloader.dfu,@true)
+bootloader: | $(BUILD)
+	cargo build --release --package librecalc-bootloader
+	cp target/thumbv7em-none-eabihf/release/librecalc-bootloader $(BUILD)/librecalc-bootloader.elf
+	$(OBJCOPY) -O binary --remove-section=.trampoline $(BUILD)/librecalc-bootloader.elf $(BOOTLOADER_BIN)
+	$(OBJCOPY) -O binary --only-section=.trampoline $(BUILD)/librecalc-bootloader.elf $(TRAMPOLINE_BIN)
+	python3 tools/pack_dfu.py $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(BUILD)/librecalc-bootloader.dfu
 
-flash-virtual: bootloader kernel
-	mkdir -p $(STATE)
-	test -f $(STATE)/internal.bin || cp emulator/state/internal.bin $(STATE)/internal.bin
-	test -f $(STATE)/external.bin || cp emulator/state/external.bin $(STATE)/external.bin
-	python3 tools/flash_virtual.py $(STATE) $(BOOTLOADER_BIN) $(TRAMPOLINE_BIN) $(KERNEL_BIN)
-
-panel: $(BUILD)/librecalc-panel
-
-$(BUILD)/librecalc-panel: emulator/panel.cpp | $(BUILD)
-	test -n "$(QT_HEADERS)" -a -n "$(QT_LIBS)" || (echo 'Qt 6 headers/libraries not found; set QT_HEADERS and QT_LIBS' >&2; exit 2)
-	$(CXX) -std=c++17 -I$(QT_HEADERS) -I$(QT_HEADERS)/QtCore -I$(QT_HEADERS)/QtGui -I$(QT_HEADERS)/QtWidgets -I$(QT_HEADERS)/QtNetwork \
-		emulator/panel.cpp -L$(QT_LIBS) -Wl,-rpath,$(QT_LIBS) -lQt6Widgets -lQt6Network -lQt6Gui -lQt6Core -o $@
-
-run-panel: panel
-	LIBRECALC_ROOT=$(CURDIR) LIBRECALC_STATE=$(CURDIR)/$(STATE) RENODE=$(RENODE) $(BUILD)/librecalc-panel
-
-clean:
-	rm -rf -- build target
-
-test-syscalls:
-	cargo test --package librecalc-abi --target $(shell rustc --print host-tuple)
+kernel: | $(BUILD)
+	cargo build --release --package librecalc-hello $(if $(CRASH),--features crash)
+	$(LLD) -r -u _start -u __app_name target/thumbv7em-none-eabihf/release/liblibrecalc_hello.a -o $(BUILD)/hello.lca
+	$(LLD) -T tools/app.ld --defsym=__app_flash=0x90100000 --gc-sections $(BUILD)/hello.lca -o $(BUILD)/home.elf
+	$(OBJCOPY) -O binary $(BUILD)/home.elf $(HOME_BIN)
+	$(OBJCOPY) --strip-all --keep-symbol=__app_header $(BUILD)/home.elf $(BUILD)/home.sym
+	cargo build --release --package librecalc-kernel
+	cp target/thumbv7em-none-eabihf/release/librecalc-kernel $(BUILD)/librecalc-kernel.elf
+	$(OBJCOPY) -O binary $(BUILD)/librecalc-kernel.elf $(KERNEL_BIN)
