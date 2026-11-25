@@ -27,21 +27,36 @@ pub fn initialize_timer() {
     unsafe { NVIC::unmask(Interrupt::TIM2) };
 }
 
-/// Microseconds since initialize_timer.
 pub fn micros() -> u64 {
-    let timer = unsafe { &*stm32h725::TIM2::ptr() };
-    let mut low = timer.cnt().read().bits();
-    // A set update flag is a wrap not counted yet, e.g. inside a syscall the interrupt can't preempt.
-    if timer.sr().read().uif().bit_is_set() {
-        timer.sr().write(|w| unsafe { w.bits(0) });
-        WRAPS.fetch_add(1, Ordering::Relaxed);
-        low = timer.cnt().read().bits();
-    }
-    u64::from(WRAPS.load(Ordering::Relaxed)) << 32 | u64::from(low)
+    cortex_m::interrupt::free(|_| {
+        let timer = unsafe { &*stm32h725::TIM2::ptr() };
+        let mut low = timer.cnt().read().bits();
+        // A set update flag is a wrap not counted yet.
+        if timer.sr().read().uif().bit_is_set() {
+            timer.sr().write(|w| unsafe { w.bits(!1) });
+            WRAPS.fetch_add(1, Ordering::Relaxed);
+            low = timer.cnt().read().bits();
+        }
+        u64::from(WRAPS.load(Ordering::Relaxed)) << 32 | u64::from(low)
+    })
 }
 
-/// Counts wraps even when nothing asks for the time for hours.
+pub fn sleep_until(deadline: u64) {
+    let timer = unsafe { &*stm32h725::TIM2::ptr() };
+    // At most half a wrap ahead, so the compare match can't be missed.
+    let wait = deadline.saturating_sub(micros()).min(1 << 31) as u32;
+    if wait > 0 {
+        timer
+            .ccr1()
+            .write(|w| unsafe { w.bits(timer.cnt().read().bits().wrapping_add(wait)) });
+        timer.dier().modify(|_, w| w.cc1ie().set_bit());
+        cortex_m::asm::wfi();
+    }
+}
+
 #[interrupt]
 fn TIM2() {
+    let timer = unsafe { &*stm32h725::TIM2::ptr() };
+    timer.sr().write(|w| unsafe { w.bits(!(1 << 1)) }); // Clear only the compare flag.
     micros();
 }

@@ -16,7 +16,7 @@ use n0120_hardware::{Console, Display};
 
 use crate::memory;
 
-const APP_FLASH: Range<u32> = 0x9010_0000..0x9040_0000;
+const APP_FLASH: Range<u32> = 0x9010_0000..0x903F_0000;
 const STACK_SIZE: usize = 32 * 1024;
 const MAX_PROCESSES: usize = 2;
 
@@ -96,6 +96,7 @@ unsafe extern "C" {
 pub fn init() {
     unsafe {
         (*SCB::PTR).shcsr.modify(|value| value | 0b111 << 16);
+        (*SCB::PTR).shpr[7].write(0xF0);
         (*FPU::PTR).fpccr.modify(|value| value & !(1 << 30));
     }
 }

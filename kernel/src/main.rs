@@ -15,6 +15,7 @@ use n0120_hardware::{
 };
 mod memory;
 mod process;
+mod settings;
 mod svc;
 
 #[used]

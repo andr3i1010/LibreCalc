@@ -57,10 +57,30 @@ macro_rules! syscall_definitions {
             0x40 => fn uptime() -> u64 {
                 Ok(n0120_hardware::micros())
             }
+            /// Waits until a key is pressed or released, or `timeout_us` passes; returns the keys held then.
+            0x31 => fn wait_event(timeout_us: u32) -> u64 {
+                let end = n0120_hardware::micros() + u64::from(timeout_us);
+                let keys = n0120_hardware::read_keyboard();
+                loop {
+                    let now = n0120_hardware::read_keyboard();
+                    if now != keys || n0120_hardware::micros() >= end {
+                        return Ok(now);
+                    }
+                    n0120_hardware::sleep_until(end.min(n0120_hardware::micros() + 20_000));
+                }
+            }
             0x41 => fn sleep_us(microseconds: u32) -> () {
-                let start = n0120_hardware::micros();
-                while n0120_hardware::micros() - start < u64::from(microseconds) {}
+                let end = n0120_hardware::micros() + u64::from(microseconds);
+                while n0120_hardware::micros() < end {
+                    n0120_hardware::sleep_until(end);
+                }
                 Ok(())
+            }
+            0x50 => fn setting(key: u32) -> u32 {
+                Ok(crate::settings::get(key))
+            }
+            0x51 => fn set_setting(key: u32, value: u32) -> () {
+                crate::settings::set(key, value)
             }
         }
     };

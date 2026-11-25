@@ -10,6 +10,25 @@ use crate::mcu::{GPIOC, delay_us, set_field};
 pub const INTERNAL_FLASH_START: u32 = 0x0800_0000;
 pub const INTERNAL_FLASH_END: u32 = 0x0808_0000;
 
+#[repr(C)]
+pub struct Trampoline {
+    pub suspend: extern "C" fn(),
+    pub erase_sector: extern "C" fn(u32),
+    pub write_memory: extern "C" fn(*mut u8, *const u8, usize),
+    pub memcmp: extern "C" fn(*const u8, *const u8, usize) -> i32,
+    pub memcpy: extern "C" fn(*mut u8, *const u8, usize) -> *mut u8,
+    pub memmove: extern "C" fn(*mut u8, *const u8, usize) -> *mut u8,
+    pub memset: extern "C" fn(*mut u8, i32, usize) -> *mut u8,
+    pub strchr: extern "C" fn(*const u8, i32) -> *const u8,
+    pub strcmp: extern "C" fn(*const u8, *const u8) -> i32,
+    pub strlcat: extern "C" fn(*mut u8, *const u8, usize) -> usize,
+    pub strlcpy: extern "C" fn(*mut u8, *const u8, usize) -> usize,
+    pub strlen: extern "C" fn(*const u8) -> usize,
+    pub strncmp: extern "C" fn(*const u8, *const u8, usize) -> i32,
+}
+
+pub const TRAMPOLINE: *const Trampoline = 0x0807_FC00 as *const Trampoline;
+
 const SECTOR_SIZE: u32 = 128 * 1024;
 const METADATA_START: u32 = 0x0807_FA00;
 const METADATA_END: u32 = 0x0807_FC00;

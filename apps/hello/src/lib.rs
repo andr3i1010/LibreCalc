@@ -4,7 +4,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use librecalc_abi::{Error, Rect};
+use librecalc_abi::{Error, Rect, setting};
 
 librecalc_abi::app!("Hello", main);
 
@@ -47,7 +47,9 @@ fn main() -> u32 {
         }
         pixels
     };
-    librecalc_abi::display_fill_rect(screen, 0x0000).unwrap();
+    let light = librecalc_abi::setting(setting::THEME) == Ok(1);
+    let background = if light { 0xFFFF } else { 0x0000 };
+    librecalc_abi::display_fill_rect(screen, background).unwrap();
     let start = librecalc_abi::uptime().unwrap();
     while librecalc_abi::keyboard_scan() == Ok(0) {
         let x =
@@ -66,7 +68,7 @@ fn main() -> u32 {
                 width: x,
                 ..square
             },
-            0x0000,
+            background,
         )
         .unwrap();
         librecalc_abi::display_fill_rect(
@@ -75,11 +77,12 @@ fn main() -> u32 {
                 width: 320 - right,
                 ..square
             },
-            0x0000,
+            background,
         )
         .unwrap();
         librecalc_abi::display_push_rect(square, &SQUARE).unwrap();
     }
+    librecalc_abi::set_setting(setting::THEME, u32::from(!light)).unwrap();
     librecalc_abi::sleep_us(200_000).unwrap();
     #[cfg(feature = "crash")]
     unsafe {

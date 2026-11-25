@@ -8,6 +8,11 @@ pub mod app;
 pub use app::{AppAllocator, AppHeader};
 pub mod syscalls;
 pub use syscalls::Rect;
+
+pub mod setting {
+    pub const THEME: u32 = 0;
+    pub const COUNT: usize = 1;
+}
 crate::syscall_definitions!(app_calls);
 
 fn call(number: u32, [a0, a1, a2, a3]: [u32; 4]) -> Result<u64, Error> {

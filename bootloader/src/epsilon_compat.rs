@@ -2,26 +2,9 @@
 
 use core::ptr::{read_volatile, write_volatile};
 use n0120_hardware::{
-    EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END, INTERNAL_FLASH_START,
+    EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END, INTERNAL_FLASH_START, Trampoline,
     erase_external_flash, program_external_flash, suspend,
 };
-
-#[repr(C)]
-struct Trampoline {
-    suspend: extern "C" fn(),
-    erase_sector: extern "C" fn(u32),
-    write_memory: extern "C" fn(*mut u8, *const u8, usize),
-    memcmp: extern "C" fn(*const u8, *const u8, usize) -> i32,
-    memcpy: extern "C" fn(*mut u8, *const u8, usize) -> *mut u8,
-    memmove: extern "C" fn(*mut u8, *const u8, usize) -> *mut u8,
-    memset: extern "C" fn(*mut u8, i32, usize) -> *mut u8,
-    strchr: extern "C" fn(*const u8, i32) -> *const u8,
-    strcmp: extern "C" fn(*const u8, *const u8) -> i32,
-    strlcat: extern "C" fn(*mut u8, *const u8, usize) -> usize,
-    strlcpy: extern "C" fn(*mut u8, *const u8, usize) -> usize,
-    strlen: extern "C" fn(*const u8) -> usize,
-    strncmp: extern "C" fn(*const u8, *const u8, usize) -> i32,
-}
 
 #[used]
 #[unsafe(link_section = ".epsilon_keypad_rows")]
