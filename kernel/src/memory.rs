@@ -1,6 +1,7 @@
 use core::{cell::RefCell, ops::Range};
 use cortex_m::{interrupt::Mutex, peripheral::MPU};
 use librecalc_abi::Error;
+use n0120_hardware::{AXI_SRAM, DTCM, EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, ITCM, SRAM1_2};
 
 struct Allocation {
     owner: u32,
@@ -14,10 +15,10 @@ pub const PAGE_COUNT: usize = 112;
 pub const APP_REGION_COUNT: usize = 14;
 
 pub const APP_RAM: [Range<usize>; 4] = [
-    0x2400_0000..0x2405_0000, // AXI SRAM
-    0x2001_0000..0x2002_0000, // DTCM above the kernel
-    0x3000_0000..0x3000_8000, // SRAM1, SRAM2
-    0x0000_8000..0x0001_0000, // ITCM, upper half
+    AXI_SRAM.start as usize..AXI_SRAM.end as usize,
+    DTCM.start as usize + 0x1_0000..DTCM.end as usize,
+    SRAM1_2.start as usize..SRAM1_2.end as usize,
+    ITCM.start as usize + 0x8000..ITCM.end as usize,
 ];
 
 struct Memory {
@@ -83,11 +84,10 @@ pub fn init() {
             mpu.rasr
                 .write(READ_WRITE | XN | WRITE_BACK | (0xFF << 8) | size(32 * 1024));
         }
-        // Apps may read and run all of external flash; they stay unprivileged either way.
         mpu.rnr.write(APP_REGION_COUNT as u32 + 1);
-        mpu.rbar.write(0x9000_0000);
+        mpu.rbar.write(EXTERNAL_FLASH_START);
         mpu.rasr
-            .write(READ_ONLY | WRITE_THROUGH | size(8 * 1024 * 1024));
+            .write(READ_ONLY | WRITE_THROUGH | size(EXTERNAL_FLASH_END - EXTERNAL_FLASH_START));
         mpu.ctrl.write(5);
     }
     cortex_m::asm::dsb();

@@ -12,11 +12,14 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-use crate::{Console, Display};
+use crate::{
+    AXI_SRAM, Console, DTCM, Display, EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END,
+    INTERNAL_FLASH_START,
+};
 
 const BODY: Rectangle = Rectangle::new(Point::new(0, 19), Size::new(320, 221));
-// DTCM and AXI SRAM, where the kernel and bootloader stacks live
-const STACK_RAM: [core::ops::Range<u32>; 2] = [0x2000_0000..0x2002_0000, 0x2400_0000..0x2405_0000];
+// Where the kernel and bootloader stacks live.
+const STACK_RAM: [core::ops::Range<u32>; 2] = [DTCM, AXI_SRAM];
 const TRACE_ADDRESSES: usize = 12;
 
 #[panic_handler]
@@ -97,8 +100,8 @@ fn scan_stack(sp: u32) -> ([u32; TRACE_ADDRESSES], usize) {
     for offset in 0..(((ram.end - sp) / 4) as usize).min(96) {
         let value = unsafe { read_volatile((sp as *const u32).add(offset)) };
         let address = value & !1;
-        if !(0x0800_0400..0x0808_0000).contains(&address)
-            && !(0x9000_0400..0x9080_0000).contains(&address)
+        if !(INTERNAL_FLASH_START + 0x400..INTERNAL_FLASH_END).contains(&address)
+            && !(EXTERNAL_FLASH_START + 0x400..EXTERNAL_FLASH_END).contains(&address)
         {
             continue;
         }

@@ -18,7 +18,7 @@ use usbd_dfu::{DFUClass, DFUManifestationError, DFUMemError, DFUMemIO};
 
 struct Flash<const RECOVERY: bool> {
     external: bool,
-    buffer: [u8; 128],
+    buffer: [u8; 256],
     stored: usize,
 }
 
@@ -29,13 +29,17 @@ fn report(error: &'static str, address: u32) {
 }
 
 impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
-    const INITIAL_ADDRESS_POINTER: u32 = if RECOVERY { 0x0800_0000 } else { 0x9000_0000 };
+    const INITIAL_ADDRESS_POINTER: u32 = if RECOVERY {
+        INTERNAL_FLASH_START
+    } else {
+        EXTERNAL_FLASH_START
+    };
     const MEM_INFO_STRING: &'static str = if RECOVERY {
         "@Flash/0x08000000/04*128Kg"
     } else {
         "@Flash/0x08000000/04*128Kg/0x90000000/08*004Kg,01*032Kg,127*064Kg"
     };
-    // Required for DFUMemIO, do not remove!
+    const TRANSFER_SIZE: u16 = 256;
     const PROGRAM_TIME_MS: u32 = 1;
     const ERASE_TIME_MS: u32 = 1;
     const FULL_ERASE_TIME_MS: u32 = 1;
@@ -136,7 +140,7 @@ pub fn run(display: &mut Display) -> ! {
         &allocator,
         Flash::<false> {
             external,
-            buffer: [0; 128],
+            buffer: [0; 256],
             stored: 0,
         },
     );
@@ -152,7 +156,6 @@ pub fn run(display: &mut Display) -> ! {
         writeln!(log, "External flash unavailable").unwrap();
     }
     writeln!(log, "Press BACK to reboot").unwrap();
-    // Building connects USB; finish the slow LCD writes before the host can enumerate.
     let mut device = UsbDeviceBuilder::new(&allocator, UsbVidPid(0x0483, 0xA291))
         .strings(&[StringDescriptors::default()
             .manufacturer("NumCrack")
@@ -181,7 +184,7 @@ pub fn recovery() -> ! {
         &allocator,
         Flash::<true> {
             external: false,
-            buffer: [0; 128],
+            buffer: [0; 256],
             stored: 0,
         },
     );

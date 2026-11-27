@@ -1,0 +1,16 @@
+[package]
+name = "graphite-ui-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The shared library image: graphite-ui's code once, for every app.
+[lib]
+crate-type = ["staticlib"]
+test = false
+bench = false
+
+[dependencies]
+graphite-ui.workspace = true
+librecalc-abi.workspace = true

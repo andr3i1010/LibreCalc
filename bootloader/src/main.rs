@@ -7,7 +7,10 @@ mod boot;
 mod dfu;
 mod epsilon_compat;
 
-use core::fmt::Write;
+use core::{
+    fmt::Write,
+    ptr::{read_volatile, write_volatile},
+};
 use cortex_m_rt::entry;
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_9X18},
@@ -18,9 +21,11 @@ use embedded_graphics::{
 };
 use embedded_sprites_macro::include_png_as_rgb565;
 use n0120_hardware::{
-    Backlight, Console, Display, Key, Led, STOCK_CPU_MHZ, initialize_keyboard, initialize_system,
-    read_keyboard,
+    Backlight, Console, Display, EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, Key, Led, STOCK_CPU_MHZ,
+    battery_is_charging, battery_percentage, battery_voltage, initialize_battery,
+    initialize_keyboard, initialize_system, pcb_revision, read_keyboard,
 };
+use stm32h7::stm32h725::{DBGMCU, FLASH};
 
 // DO NOT REMOVE!!!!!!!! it WILL brick your calculator (from experience)
 #[unsafe(no_mangle)]
@@ -56,30 +61,13 @@ fn main() -> ! {
     }
 
     let rcc = unsafe { &*stm32h7::stm32h725::RCC::ptr() };
-    let rows = unsafe { &*stm32h7::stm32h725::GPIOA::ptr() };
-    let columns = unsafe { &*stm32h7::stm32h725::GPIOC::ptr() };
     rcc.ahb4enr()
         .modify(|_, w| w.gpioaen().enabled().gpiocen().enabled());
     let _ = rcc.ahb4enr().read().bits();
 
-    // Only PA8/PC11 are needed to sample 6 before normal hardware initialization.
-    columns
-        .moder()
-        .modify(|r, w| unsafe { w.bits(r.bits() & !(3 << 22)) });
-    columns
-        .pupdr()
-        .modify(|r, w| unsafe { w.bits((r.bits() & !(3 << 22)) | (1 << 22)) });
-    rows.bsrr().write(|w| unsafe { w.bits(1 << 24) });
-    rows.otyper()
-        .modify(|r, w| unsafe { w.bits(r.bits() | (1 << 8)) });
-    rows.pupdr()
-        .modify(|r, w| unsafe { w.bits(r.bits() & !(3 << 16)) });
-    rows.moder()
-        .modify(|r, w| unsafe { w.bits((r.bits() & !(3 << 16)) | (1 << 16)) });
-    cortex_m::asm::delay(4096);
-    rows.bsrr().write(|w| unsafe { w.bits(1 << 8) });
-    if columns.idr().read().bits() & (1 << 11) == 0 {
-        //Key 6
+    // The keyboard only needs its GPIOs, so 6 can be checked before any other initialization.
+    initialize_keyboard();
+    if Key::Six.is_pressed(read_keyboard()) {
         dfu::recovery();
         // Recovery is a backup feature in case if initialization of the hardware fails
         // You can still unbrick your unit by holding 6 at boot, if any code past this point fails.
@@ -87,7 +75,6 @@ fn main() -> ! {
     }
 
     initialize_system(STOCK_CPU_MHZ);
-    initialize_keyboard();
     let mut backlight = Backlight::new(0);
     let mut display = Display::new();
     let mut led = Led::new();
@@ -97,7 +84,7 @@ fn main() -> ! {
     let mut style = MonoTextStyle::new(&FONT_9X18, Rgb565::WHITE);
     style.background_color = Some(Rgb565::BLACK);
     let slots = [boot::get_slot(0), boot::get_slot(1)];
-    let items = ["Boot slot A", "Boot slot B", "DFU", "Power off"];
+    let items = ["Boot slot A", "Boot slot B", "DFU", "Power off", "Info"];
     let mut selected = 0usize;
     let mut previous_keys = read_keyboard();
     loop {
@@ -159,12 +146,73 @@ fn main() -> ! {
                 }
             }
             if confirmed && selected == old_selected && selected == 2 {
+                if Key::Six.is_pressed(keys) {
+                    // STM32H725 ROM vector table (the system-memory region starts at 0x1FF00000).
+                    const ROM: u32 = 0x1FF0_9800;
+                    let stack = unsafe { read_volatile(ROM as *const u32) };
+                    let reset = unsafe { read_volatile((ROM + 4) as *const u32) };
+
+                    rcc.cr().modify(|_, w| w.hsion().set_bit().hsidiv().div1());
+                    assert!((0..5_000_000).any(|_| {
+                        let clocks = rcc.cr().read();
+                        clocks.hsirdy().bit_is_set() && clocks.hsidivf().bit_is_set()
+                    }));
+                    rcc.cfgr().modify(|_, w| w.sw().hsi());
+                    assert!((0..5_000_000).any(|_| rcc.cfgr().read().sws().is_hsi()));
+                    rcc.d1cfgr()
+                        .write(|w| w.d1cpre().div1().hpre().div1().d1ppre().div1());
+                    rcc.d2cfgr().write(|w| w.d2ppre1().div1().d2ppre2().div1());
+                    rcc.d3cfgr().write(|w| w.d3ppre().div1());
+                    rcc.cr().modify(|_, w| {
+                        w.pll1on()
+                            .clear_bit()
+                            .pll2on()
+                            .clear_bit()
+                            .pll3on()
+                            .clear_bit()
+                    });
+                    assert!((0..5_000_000).any(|_| {
+                        let clocks = rcc.cr().read();
+                        !clocks.pll1rdy().bit()
+                            && !clocks.pll2rdy().bit()
+                            && !clocks.pll3rdy().bit()
+                    }));
+
+                    unsafe {
+                        core::arch::asm!("cpsid i", options(nomem, nostack, preserves_flags));
+                        write_volatile(0xE000_E010 as *mut u32, 0); // SysTick CTRL
+                        write_volatile(0xE000_E014 as *mut u32, 0); // SysTick LOAD
+                        write_volatile(0xE000_E018 as *mut u32, 0); // SysTick VAL
+                        write_volatile(0xE000_ED04 as *mut u32, (1 << 25) | (1 << 27));
+                        for bank in 0..8 {
+                            write_volatile((0xE000_E180usize + bank * 4) as *mut u32, u32::MAX);
+                            write_volatile((0xE000_E280usize + bank * 4) as *mut u32, u32::MAX);
+                        }
+                        write_volatile(0xE000_ED94 as *mut u32, 0); // MPU CTRL
+                        write_volatile(0xE000_ED08 as *mut u32, ROM); // VTOR
+                        core::arch::asm!("dsb sy", "isb sy", options(nomem, nostack));
+                        core::arch::asm!(
+                            "msr BASEPRI, r2",
+                            "msr FAULTMASK, r2",
+                            "msr CONTROL, r2",
+                            "isb sy",
+                            "msr MSP, {stack}",
+                            "cpsie i",
+                            "bx {reset}",
+                            stack = in(reg) stack,
+                            reset = in(reg) reset,
+                            in("r2") 0u32,
+                            options(noreturn),
+                        );
+                    }
+                }
                 dfu::run(&mut display);
             }
             if confirmed && selected == old_selected && selected == 3 {
                 n0120_hardware::power_off();
             }
-            if confirmed && selected == old_selected && selected < boot::SLOTS.len() {
+            // Boot slot A, boot slot B or info: DFU and power off never return.
+            if confirmed && selected == old_selected {
                 display.clear(Rgb565::BLACK).unwrap();
                 let mut log = Console::new(
                     &mut display,
@@ -172,11 +220,63 @@ fn main() -> ! {
                     Rgb565::WHITE,
                     Rgb565::BLACK,
                 );
-                writeln!(log, "Boot slot {}", if selected == 0 { "A" } else { "B" }).unwrap();
-                writeln!(log, "Preparing external flash...").unwrap();
-                writeln!(log, "Checking entry at +0x20...").unwrap();
-                let error = boot::boot_slot(boot::SLOTS[selected]).unwrap_err();
-                writeln!(log, "ERROR: {error}").unwrap();
+                if selected == 4 {
+                    let id = unsafe { &*DBGMCU::ptr() }.idc().read();
+                    let (dev, rev) = (id.dev_id().bits(), id.rev_id().bits());
+                    let [a, b, c] = unsafe { read_volatile(0x1FF1_E800 as *const [u32; 3]) };
+                    let flash_kb = unsafe { read_volatile(0x1FF1_E880 as *const u16) };
+                    let external_mb = (EXTERNAL_FLASH_END - EXTERNAL_FLASH_START) >> 20;
+                    let version = env!("CARGO_PKG_VERSION");
+                    writeln!(log, "LibreCalc bootloader {version}\n").unwrap();
+                    writeln!(log, "Chip       STM32 {dev:#05x} rev {rev:#06x}").unwrap();
+                    writeln!(log, "CPU        {STOCK_CPU_MHZ} MHz").unwrap();
+                    writeln!(log, "Flash      {flash_kb} KB + {external_mb} MB external").unwrap();
+                    match pcb_revision() {
+                        Some(pcb) => writeln!(log, "PCB        {}.{:02}", pcb / 100, pcb % 100),
+                        None => writeln!(log, "PCB        blank"),
+                    }
+                    .unwrap();
+                    writeln!(log, "Unique ID  {a:08X}{b:08X}{c:08X}").unwrap();
+                    let battery = initialize_battery()
+                        .and_then(|()| Ok((battery_voltage()?, battery_percentage()?)));
+                    match battery {
+                        Ok((volts, percent)) => writeln!(
+                            log,
+                            "Battery    {} mV, {percent}%{}",
+                            (volts * 1000.0) as u32,
+                            ["", ", charging"][battery_is_charging() as usize]
+                        ),
+                        Err(error) => writeln!(log, "Battery    {error}"),
+                    }
+                    .unwrap();
+
+                    let flash = unsafe { &*FLASH::ptr() };
+                    let (options, options2) = (flash.optsr_cur().read(), flash.optsr2_cur().read());
+                    let rdp = match options.rdp().bits() {
+                        0xAA => 0,
+                        0xCC => 2,
+                        _ => 1,
+                    };
+                    let locked = !flash.wpsn_cur().read().wrpsn().bits();
+                    let boot = u32::from(flash.boot_cur().read().boot_cm_add0().bits()) << 16;
+                    let bor = options.bor_lev().bits();
+                    let watchdog = ["hardware", "software"][options.iwdg1_sw().bit() as usize];
+                    let itcm = [64, 128, 192, 64][options2.tcm_axi_shared().bits() as usize];
+                    let boost = ["off", "on"][options2.cpufreq_boost().bit() as usize];
+                    writeln!(log, "\nRead protection  level {rdp}").unwrap();
+                    writeln!(log, "Locked sectors   {locked:08b}").unwrap();
+                    writeln!(log, "Boot address     {boot:#010x}").unwrap();
+                    writeln!(log, "Brown-out level  {bor}").unwrap();
+                    writeln!(log, "Watchdog         {watchdog}").unwrap();
+                    writeln!(log, "ITCM             {itcm} KB").unwrap();
+                    writeln!(log, "CPU boost        {boost}").unwrap();
+                } else {
+                    writeln!(log, "Boot slot {}", if selected == 0 { "A" } else { "B" }).unwrap();
+                    writeln!(log, "Preparing external flash...").unwrap();
+                    writeln!(log, "Checking entry at +0x20...").unwrap();
+                    let error = boot::boot_slot(boot::SLOTS[selected]).unwrap_err();
+                    writeln!(log, "ERROR: {error}").unwrap();
+                }
                 writeln!(log, "Press BACK to go back").unwrap();
                 let mut back_was_pressed = Key::Back.is_pressed(keys);
                 loop {

@@ -23,7 +23,7 @@ unsafe impl GlobalAlloc for AppAllocator {
         if let Some(pointer) = heap.allocate(layout) {
             return pointer.as_ptr();
         }
-        let size = (layout.size() + layout.align() + 64).next_multiple_of(4096);
+        let size = (layout.size() * 9 / 8 + layout.align() + 64).next_multiple_of(4096);
         let Ok(address) = crate::alloc(size as u32) else {
             return core::ptr::null_mut();
         };
@@ -52,17 +52,15 @@ pub struct AppHeader {
 }
 
 impl AppHeader {
-    pub fn is_valid(&self) -> bool {
-        self.magic == APP_MAGIC
-            && self.magic_end == APP_MAGIC
-            && self.schema == 1
-            && self.size >= core::mem::size_of::<Self>() as u32
-            && self.entry < self.size
-            && self.name < self.size
-    }
-
     pub fn address(&self) -> u32 {
         self as *const Self as u32
+    }
+
+    pub fn icon(&self) -> u32 {
+        if self.icon_size != 0 || self.icon.saturating_add(4) > self.size {
+            return 0;
+        }
+        unsafe { ((self.address() + self.icon) as *const u32).read_unaligned() }
     }
 
     pub fn name(&self) -> &str {
@@ -78,12 +76,17 @@ impl AppHeader {
 
 #[macro_export]
 macro_rules! app {
-    ($name:literal, $main:path) => {
+    ($name:literal, $main:path, $icon:expr) => {
         #[allow(non_upper_case_globals)]
         #[unsafe(no_mangle)]
         #[unsafe(link_section = ".rodata.app_name")]
         static __app_name: [u8; $name.len() + 1] =
             *concat!($name, "\0").as_bytes().first_chunk().unwrap();
+
+        #[allow(non_upper_case_globals)]
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = ".rodata.app_icon")]
+        static __app_icon: u32 = $icon;
 
         #[unsafe(no_mangle)]
         extern "C" fn _start() -> ! {

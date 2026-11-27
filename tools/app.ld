@@ -3,8 +3,9 @@
 /* Links a native app (.lca) into place: pass --defsym=__app_flash=<address in app flash>. */
 ENTRY(_start)
 
-/* App RAM starts above the 32 KiB stack at the bottom of AXI SRAM, see kernel/src/process.rs. */
-__app_ram = 0x24008000;
+/* App globals live on one 4 KiB page at the start of AXI SRAM; the stack goes anywhere, see
+   kernel/src/process.rs. */
+__app_ram = 0x24000000;
 
 /* Separate segments, or the file would span the gap between flash and RAM. */
 PHDRS
@@ -24,11 +25,12 @@ SECTIONS
     LONG(__app_end - __app_header)
     LONG(_start - __app_header)
     LONG(__app_name - __app_header)
-    LONG(0)                      /* icon */
-    LONG(0)                      /* icon size */
+    LONG(__app_icon - __app_header)
+    LONG(0)                      /* icon size: 0 means a Graphite icon */
     LONG(__bss_end - __app_ram)
     LONG(0x5041434C)
     KEEP(*(.rodata.app_name))
+    KEEP(*(.rodata.app_icon))
   } :flash
   .text : { *(.text .text.*) }
   .rodata : { *(.rodata .rodata.*) }
@@ -51,4 +53,4 @@ SECTIONS
   __app_end = __data_load + SIZEOF(.data);
 }
 
-ASSERT(__bss_end <= 0x24050000, "app RAM does not fit in AXI SRAM");
+ASSERT(__bss_end <= 0x24001000, "app globals outgrew their 4 KiB page");

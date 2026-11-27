@@ -7,7 +7,13 @@ pub use status::Error;
 pub mod app;
 pub use app::{AppAllocator, AppHeader};
 pub mod syscalls;
-pub use syscalls::Rect;
+pub use syscalls::{CHARACTERS, Key, Rect};
+pub const SCREEN_COPY: usize = 0x2400_1000;
+
+// Slot A of external flash after the kernel: the shared UI library, apps, then the settings log.
+pub const LIBRARY: u32 = 0x9008_0000;
+pub const APP_FLASH: core::ops::Range<u32> = 0x9010_0000..SETTINGS;
+pub const SETTINGS: u32 = 0x903F_0000;
 
 pub mod setting {
     pub const THEME: u32 = 0;

@@ -10,13 +10,14 @@ fn main() {
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rerun-if-changed=memory.x");
 
-    // The kernel starts home by its header; take that address from home without linking its code.
+    // The kernel boots an app by its header: take that address from the app's build without
+    // linking its code (the Makefile's BOOT picks the app).
     if std::env::var("CARGO_PKG_NAME").unwrap() == "librecalc-kernel" {
-        let home = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("../build/home.sym");
-        if home.exists() {
-            println!("cargo:rustc-link-arg=--just-symbols={}", home.display());
+        let boot = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../build/boot.sym");
+        if boot.exists() {
+            println!("cargo:rustc-link-arg=--just-symbols={}", boot.display());
         }
-        println!("cargo:rerun-if-changed={}", home.display());
+        println!("cargo:rerun-if-changed={}", boot.display());
     }
 }

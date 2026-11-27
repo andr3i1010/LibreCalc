@@ -27,7 +27,8 @@ pub struct Trampoline {
     pub strncmp: extern "C" fn(*const u8, *const u8, usize) -> i32,
 }
 
-pub const TRAMPOLINE: *const Trampoline = 0x0807_FC00 as *const Trampoline;
+// Epsilon finds it right after the board metadata.
+pub const TRAMPOLINE: *const Trampoline = METADATA_END as *const Trampoline;
 
 const SECTOR_SIZE: u32 = 128 * 1024;
 const METADATA_START: u32 = 0x0807_FA00;
@@ -75,10 +76,16 @@ pub fn program_internal_flash(address: u32, data: &[u8]) -> Result<(), ()> {
     program_words(address, data)
 }
 
+/// Stored inverted, so a blank page reads as `None`.
+pub fn pcb_revision() -> Option<u32> {
+    let word = unsafe { read_volatile(METADATA_START as *const u32) };
+    (word != u32::MAX).then_some(!word)
+}
+
 // Stock records this on first boot. Epsilon reads a blank page as a legacy board and hangs on ADC3.
 // Only 425 is ever written: the word is permanent and the straps are not trusted enough for 415.
 pub fn restore_pcb_revision() -> Result<(), &'static str> {
-    if unsafe { read_volatile(METADATA_START as *const u32) } != u32::MAX {
+    if pcb_revision().is_some() {
         return Ok(());
     }
     if sample_with_pull_down(3) || !sample_with_pull_down(11) {
@@ -146,6 +153,21 @@ fn program_words(address: u32, data: &[u8]) -> Result<(), ()> {
 fn unlock() -> Result<(), ()> {
     wait_ready()?;
     let flash = unsafe { &*FLASH::ptr() };
+    if flash.wpsn_cur().read().wrpsn().bits() != 0xFF {
+        if flash.optcr().read().optlock().bit_is_set() {
+            flash.optkeyr().write(|w| unsafe { w.bits(0x0819_2A3B) });
+            flash.optkeyr().write(|w| unsafe { w.bits(0x4C5D_6E7F) });
+        }
+        flash
+            .wpsn_prg()
+            .modify(|_, w| unsafe { w.wrpsn().bits(0xFF) });
+        flash.optcr().modify(|_, w| w.optstart().set_bit());
+        while flash.optsr_cur().read().opt_busy().bit_is_set() {}
+        flash.optcr().modify(|_, w| w.optlock().set_bit());
+        if flash.wpsn_cur().read().wrpsn().bits() != 0xFF {
+            return Err(());
+        }
+    }
     if flash.cr().read().lock().bit_is_set() {
         flash.keyr().write(|w| unsafe { w.bits(0x4567_0123) });
         flash.keyr().write(|w| unsafe { w.bits(0xCDEF_89AB) });

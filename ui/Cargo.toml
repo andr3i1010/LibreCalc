@@ -1,0 +1,17 @@
+[package]
+name = "graphite-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+librecalc-abi.workspace = true
+
+# These run on the host at build time, turning assets/ into bitmaps.
+[build-dependencies]
+fontdue.workspace = true

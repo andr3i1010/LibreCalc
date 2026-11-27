@@ -1,10 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use core::{
+    ops::Range,
     ptr::{read_volatile, write_volatile},
     sync::atomic::{AtomicU32, Ordering},
 };
 use stm32h7::stm32h725::{self, rcc::d1ccipr::FMCSEL};
+
+use crate::{
+    Key,
+    backlight::Backlight,
+    display::Display,
+    flash::TRAMPOLINE,
+    keyboard::{KEYBOARD_COLUMNS, KEYBOARD_ROWS, read_keyboard},
+};
+
+// The chip's RAM blocks.
+pub const ITCM: Range<u32> = 0x0000_0000..0x0001_0000;
+pub const DTCM: Range<u32> = 0x2000_0000..0x2002_0000;
+pub const AXI_SRAM: Range<u32> = 0x2400_0000..0x2405_0000;
+pub const SRAM1_2: Range<u32> = 0x3000_0000..0x3000_8000;
 
 pub const GPIOA: usize = 0x5802_0000;
 pub const GPIOB: usize = 0x5802_0400;
@@ -255,15 +270,6 @@ pub fn initialize_system(mhz: u32) {
     set_field(GPIOD, 0x08, BACKLIGHT_PIN * 2, 2, 1); // Medium speed.
 }
 
-pub fn enable_backup_sram() {
-    let rcc = unsafe { &*stm32h725::RCC::ptr() };
-    let pwr = unsafe { &*stm32h725::PWR::ptr() };
-    rcc.ahb4enr().modify(|_, w| w.bkpramen().enabled());
-    let _ = rcc.ahb4enr().read().bits();
-    pwr.cr1().modify(|_, w| w.dbp().set_bit());
-    let _ = pwr.cr1().read().bits();
-}
-
 fn wait_ready(name: &str, mut ready: impl FnMut() -> bool) {
     if !(0..5_000_000).any(|_| ready()) {
         panic!("timeout waiting for {name}");
@@ -274,12 +280,16 @@ pub fn reset() -> ! {
     cortex_m::peripheral::SCB::sys_reset()
 }
 
+/// Epsilon's trampoline suspend: Epsilon has set the sleep mode and wake-up lines; this stops the
+/// clocks the external flash and core run on, sleeps, and restores them as they were. Matches the
+/// stock bootloader's sequence.
 pub extern "C" fn suspend() {
     #[cfg(target_arch = "arm")]
     let _ = crate::spi::flash_operation(0, 0, || {
         let rcc = unsafe { &*stm32h725::RCC::ptr() };
+        let pwr = unsafe { &*stm32h725::PWR::ptr() };
         let ospi = unsafe { &*stm32h725::OCTOSPI1::ptr() };
-        let pll2 = rcc.cr().read().pll2on().bit_is_set();
+        let clocks = rcc.cr().read();
 
         // Stop mapped reads before removing their PLL clock; the wrapper restores them.
         ospi.cr().modify(|_, w| w.abort().requested());
@@ -304,23 +314,35 @@ pub extern "C" fn suspend() {
                 && clocks.pll2rdy().bit_is_clear()
                 && clocks.hsi48rdy().bit_is_clear()
         });
+        // Epsilon asks for Stop with SVOS scale 5, which needs VOS scale 3 (VOS = 1) first.
+        pwr.d3cr().modify(|_, w| unsafe { w.vos().bits(1) });
+        crate::spi::wait_ready(|| pwr.d3cr().read().vosrdy().bit_is_set());
 
         // shortcut: flash remains powered; add chip power-down if standby current needs reducing.
         unsafe { core::arch::asm!("dsb sy", "sev", "wfe", "nop", "wfe", options(nostack)) };
 
-        rcc.cr()
-            .modify(|_, w| w.csion().set_bit().hsi48on().set_bit());
-        crate::spi::wait_ready(|| {
-            let clocks = rcc.cr().read();
-            clocks.csion().bit_is_set() && clocks.hsi48rdy().bit_is_set()
+        pwr.d3cr().modify(|_, w| unsafe { w.vos().bits(0) });
+        crate::spi::wait_ready(|| pwr.d3cr().read().vosrdy().bit_is_set());
+        // Stop turned the oscillators off; turn back on the ones that ran.
+        rcc.cr().modify(|_, w| {
+            w.csion()
+                .bit(clocks.csion().bit())
+                .hsi48on()
+                .bit(clocks.hsi48on().bit())
+                .pll1on()
+                .bit(clocks.pll1on().bit())
+                .pll2on()
+                .bit(clocks.pll2on().bit())
         });
+        crate::spi::wait_ready(|| {
+            let now = rcc.cr().read();
+            (!clocks.csion().bit() || now.csirdy().bit_is_set())
+                && (!clocks.hsi48on().bit() || now.hsi48rdy().bit_is_set())
+                && (!clocks.pll1on().bit() || now.pll1rdy().bit_is_set())
+                && (!clocks.pll2on().bit() || now.pll2rdy().bit_is_set())
+        });
+        // Epsilon drops the AHB divider to 1 before suspending and expects it back at 2.
         rcc.d1cfgr().modify(|_, w| w.d1cpre().div1().hpre().div2());
-        rcc.cr()
-            .modify(|_, w| w.pll1on().set_bit().pll2on().bit(pll2));
-        crate::spi::wait_ready(|| {
-            let clocks = rcc.cr().read();
-            clocks.pll1rdy().bit_is_set() && (!pll2 || clocks.pll2rdy().bit_is_set())
-        });
         rcc.cfgr().modify(|_, w| w.sw().pll1());
         crate::spi::wait_ready(|| rcc.cfgr().read().sws().is_pll1());
         Ok(())
@@ -328,19 +350,13 @@ pub extern "C" fn suspend() {
 }
 
 pub fn power_off() -> ! {
-    let rows = unsafe { &*stm32h725::GPIOA::ptr() };
-    let columns = unsafe { &*stm32h725::GPIOC::ptr() };
     // Put the keypad lines in analog mode and remove pulls to avoid standby current.
-    rows.moder()
-        .modify(|r, w| unsafe { w.bits(r.bits() | 0xC033_F0FF) });
-    rows.pupdr()
-        .modify(|r, w| unsafe { w.bits(r.bits() & !0xC033_F0FF) });
-    columns
-        .moder()
-        .modify(|r, w| unsafe { w.bits(r.bits() | 0x00CC_3F0C) });
-    columns
-        .pupdr()
-        .modify(|r, w| unsafe { w.bits(r.bits() & !0x00CC_3F0C) });
+    for (port, pins) in [(GPIOA, &KEYBOARD_ROWS[..]), (GPIOC, &KEYBOARD_COLUMNS[..])] {
+        for pin in pins.iter().map(|&pin| u32::from(pin)) {
+            set_field(port, 0x00, pin * 2, 2, 3);
+            set_field(port, 0x0C, pin * 2, 2, 0);
+        }
+    }
 
     let pwr = unsafe { &*stm32h725::PWR::ptr() };
     pwr.cpucr().modify(|_, w| {
@@ -363,6 +379,47 @@ pub fn power_off() -> ! {
     cortex_m::asm::wfe();
     cortex_m::asm::wfe();
     reset()
+}
+
+/// Sleeps with RAM kept until OnOff is pressed again; the screen keeps its picture.
+pub fn standby() {
+    let key = Key::OnOff as usize;
+    let row = u32::from(KEYBOARD_ROWS[key / KEYBOARD_COLUMNS.len()]);
+    let column = u32::from(KEYBOARD_COLUMNS[key % KEYBOARD_COLUMNS.len()]);
+    // Let go of OnOff (and let it stop bouncing) before sleeping and after waking.
+    let released = || {
+        while Key::OnOff.is_pressed(read_keyboard()) {}
+        delay_us(20_000);
+    };
+    released();
+    Display::write_command(0x28); // Display off
+    Display::write_command(0x10); // Sleep in
+    // shortcut: the backlight comes back at full brightness; keep its level once it is a setting.
+    unsafe { write_volatile((GPIOD + 0x18) as *mut u32, 1 << (BACKLIGHT_PIN + 16)) };
+
+    // OnOff joins its row to its column: with the row low, pressing it pulls the column low.
+    let rcc = unsafe { &*stm32h725::RCC::ptr() };
+    rcc.apb4enr().modify(|_, w| w.syscfgen().enabled());
+    let exti = stm32h725::EXTI::ptr() as usize;
+    let syscfg = stm32h725::SYSCFG::ptr() as usize;
+    unsafe { write_volatile((GPIOA + 0x18) as *mut u32, 1 << (row + 16)) };
+    // EXTICR: the column's line listens to port C.
+    set_field(syscfg, 0x08 + column as usize / 4 * 4, column % 4 * 4, 4, 2);
+    set_field(exti, 0x04, column, 1, 1); // FTSR1: falling edge
+    set_field(exti, 0x84, column, 1, 1); // CPUEMR1: as a wake-up event
+    unsafe { cortex_m::Peripherals::steal().SCB }.set_sleepdeep();
+    // Through the trampoline: suspend turns off the external flash this code runs from.
+    unsafe { ((*TRAMPOLINE).suspend)() };
+    unsafe { cortex_m::Peripherals::steal().SCB }.clear_sleepdeep();
+    set_field(exti, 0x84, column, 1, 0);
+    set_field(exti, 0x04, column, 1, 0);
+    unsafe { write_volatile((GPIOA + 0x18) as *mut u32, 1 << row) };
+
+    Display::write_command(0x11); // Sleep out
+    delay_us(120_000);
+    Display::write_command(0x29); // Display on
+    Backlight::new(Backlight::MAX_LEVEL);
+    released();
 }
 
 // function to update a bitfield in a hardware reg, do not replace

@@ -15,4 +15,5 @@ bench = false
 crash = []
 
 [dependencies]
+graphite-ui.workspace = true
 librecalc-abi.workspace = true

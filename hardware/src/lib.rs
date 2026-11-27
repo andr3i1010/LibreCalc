@@ -22,13 +22,14 @@ pub use console::Console;
 pub use display::{Display, fill_rect, push_rect, wait_for_vblank};
 pub use flash::{
     INTERNAL_FLASH_END, INTERNAL_FLASH_START, TRAMPOLINE, Trampoline, erase_internal_flash,
-    program_internal_flash, restore_pcb_revision,
+    pcb_revision, program_internal_flash, restore_pcb_revision,
 };
-pub use keyboard::{Key, initialize_keyboard, read_keyboard};
+pub use keyboard::{KEYBOARD_ROWS, initialize_keyboard, read_keyboard};
 pub use led::Led;
+pub use librecalc_abi::Key;
 pub use mcu::{
-    EPSILON_CPU_MHZ, FAST_CPU_MHZ, STOCK_CPU_MHZ, enable_backup_sram, initialize_system, power_off,
-    reset, suspend,
+    AXI_SRAM, DTCM, EPSILON_CPU_MHZ, FAST_CPU_MHZ, ITCM, SRAM1_2, STOCK_CPU_MHZ, initialize_system,
+    power_off, reset, standby, suspend,
 };
 pub use spi::{
     EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, erase_external_flash, initialize_spi,

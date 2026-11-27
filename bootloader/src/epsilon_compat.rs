@@ -2,13 +2,14 @@
 
 use core::ptr::{read_volatile, write_volatile};
 use n0120_hardware::{
-    EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END, INTERNAL_FLASH_START, Trampoline,
-    erase_external_flash, program_external_flash, suspend,
+    AXI_SRAM, DTCM, EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, INTERNAL_FLASH_END,
+    INTERNAL_FLASH_START, KEYBOARD_ROWS, Trampoline, erase_external_flash, program_external_flash,
+    suspend,
 };
 
 #[used]
 #[unsafe(link_section = ".epsilon_keypad_rows")]
-static KEYPAD_ROWS: [u8; 9] = [1, 0, 2, 3, 6, 7, 8, 10, 15];
+static KEYPAD_ROWS: [u8; 9] = KEYBOARD_ROWS;
 
 #[used]
 #[unsafe(link_section = ".epsilon_keypad_columns")]
@@ -57,8 +58,8 @@ extern "C" fn write_memory(destination: *mut u8, source: *const u8, length: usiz
         || ![
             (INTERNAL_FLASH_START, INTERNAL_FLASH_END),
             (EXTERNAL_FLASH_START, EXTERNAL_FLASH_END),
-            (0x2000_0000, 0x2002_0000),
-            (0x2400_0000, 0x2405_0000),
+            (DTCM.start, DTCM.end),
+            (AXI_SRAM.start, AXI_SRAM.end),
         ]
         .into_iter()
         .any(|(start, end)| source as u32 >= start && source_end <= end)

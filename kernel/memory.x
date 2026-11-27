@@ -3,7 +3,8 @@
 MEMORY
 {
   HEADER   : ORIGIN = 0x90000000, LENGTH = 0x400
-  FLASH    : ORIGIN = 0x90000400, LENGTH = 0xFFC00
+  /* Ends where the shared UI library starts (tools/library.ld). */
+  FLASH    : ORIGIN = 0x90000400, LENGTH = 0x7FC00
   RAM      : ORIGIN = 0x20000000, LENGTH = 56K
   STACK    : ORIGIN = 0x2000E000, LENGTH = 8K
 }

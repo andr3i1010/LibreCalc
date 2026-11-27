@@ -3,14 +3,17 @@
 use core::ptr::read_volatile;
 #[cfg(target_arch = "arm")]
 use core::{arch::asm, ptr::write_volatile};
-use n0120_hardware::initialize_spi;
+use n0120_hardware::{AXI_SRAM, DTCM, EXTERNAL_FLASH_END, EXTERNAL_FLASH_START, initialize_spi};
 #[cfg(target_arch = "arm")]
 use n0120_hardware::{
     EPSILON_CPU_MHZ, FAST_CPU_MHZ, initialize_battery, initialize_system, initialize_usb_hardware,
     restore_pcb_revision,
 };
 
-pub const SLOTS: [u32; 2] = [0x9000_0000, 0x9040_0000];
+pub const SLOTS: [u32; 2] = [
+    EXTERNAL_FLASH_START,
+    EXTERNAL_FLASH_START + (EXTERNAL_FLASH_END - EXTERNAL_FLASH_START) / 2,
+];
 
 const FIRMWARE_START: u32 = 0x400;
 const FIRMWARE_LENGTH: u32 = 0x3f_0000;
@@ -49,21 +52,56 @@ pub fn boot_slot(base: u32) -> Result<(), &'static str> {
     let stack = unsafe { read_volatile((base + 0x20) as *const u32) };
     let reset = unsafe { read_volatile((base + 0x24) as *const u32) };
     let stack_valid = stack & 7 == 0
-        && ((0x2000_0000..=0x2002_0000).contains(&stack)
-            || (0x2400_0000..=0x2405_0000).contains(&stack));
+        && [DTCM, AXI_SRAM]
+            .iter()
+            .any(|ram| (ram.start..=ram.end).contains(&stack));
     if !stack_valid {
         return Err("invalid initial stack pointer");
     }
     if reset & 1 == 0 || !(base + FIRMWARE_START..base + FIRMWARE_LENGTH).contains(&(reset & !1)) {
         return Err("invalid reset address for this slot");
     }
-    if unsafe { read_volatile((base + 8) as *const u32) } == LIBRECALC_MAGIC {
-        initialize_system(FAST_CPU_MHZ);
-    } else {
+    if unsafe { read_volatile((base + 8) as *const u32) } == EPSILON_MAGIC {
         initialize_system(EPSILON_CPU_MHZ);
         restore_pcb_revision()?;
         initialize_battery()?;
         initialize_usb_hardware();
+        let otg = unsafe { &*stm32h7::stm32h725::OTG1_HS_GLOBAL::ptr() };
+        let device = unsafe { &*stm32h7::stm32h725::OTG1_HS_DEVICE::ptr() };
+        let power = unsafe { &*stm32h7::stm32h725::OTG1_HS_PWRCLK::ptr() };
+        // Leave the embedded full-speed PHY and device core ready for Epsilon.
+        power.pcgcr().write(|w| w.stppclk().clear_bit());
+        if !(0..5_000_000).any(|_| otg.grstctl().read().ahbidl().bit_is_set()) {
+            return Err("USB bus idle timeout");
+        }
+        otg.gusbcfg()
+            .write(|w| w.physel().set_bit().fdmod().set_bit());
+        cortex_m::asm::delay(1000);
+        if !(0..5_000_000).any(|_| otg.grstctl().read().ahbidl().bit_is_set()) {
+            return Err("USB PHY bus idle timeout");
+        }
+        otg.grstctl().write(|w| w.csrst().set_bit());
+        if !(0..5_000_000).any(|_| otg.grstctl().read().csrst().bit_is_clear()) {
+            return Err("USB controller reset timeout");
+        }
+        otg.gccfg()
+            .write(|w| w.pwrdwn().set_bit().vbden().set_bit());
+        otg.gusbcfg().modify(|_, w| unsafe { w.trdt().bits(6) });
+        device.dcfg().write(|w| unsafe { w.dspd().bits(3) });
+        otg.grxfsiz().write(|w| unsafe { w.rxfd().bits(128) });
+        otg.gahbcfg().write(|w| w.gintmsk().set_bit());
+        otg.gintmsk().write(|w| {
+            w.enumdnem()
+                .set_bit()
+                .rxflvlm()
+                .set_bit()
+                .iepint()
+                .set_bit()
+        });
+        device.daintmsk().write(|w| unsafe { w.iepm().bits(1) });
+        device.diepmsk().write(|w| w.xfrcm().set_bit());
+    } else {
+        initialize_system(FAST_CPU_MHZ);
     }
 
     unsafe {

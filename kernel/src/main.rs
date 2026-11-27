@@ -11,8 +11,10 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 use n0120_hardware::{
-    Console, Display, FAST_CPU_MHZ, initialize_keyboard, initialize_system, initialize_timer,
+    Console, Display, FAST_CPU_MHZ, initialize_battery, initialize_keyboard, initialize_system,
+    initialize_timer,
 };
+mod keyboard;
 mod memory;
 mod process;
 mod settings;
@@ -62,6 +64,7 @@ fn main() -> ! {
     core.SCB.enable_dcache(&mut core.CPUID);
     initialize_keyboard();
     initialize_timer();
+    let _ = initialize_battery();
     process::init();
 
     writeln!(console, "Starting home...").unwrap();

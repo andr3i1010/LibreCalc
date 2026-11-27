@@ -66,7 +66,31 @@ pub fn initialize_spi() -> Result<(), &'static str> {
         wait_flash_ready::<true>()?;
     }
 
-    enter_memory_mapped()
+    wait_controller_idle()?;
+    let ospi = unsafe { &*stm32h725::OCTOSPI1::ptr() };
+    ospi.fcr().write(|w| unsafe { w.bits(0x1F) });
+    ospi.cr()
+        .write(|w| w.en().enabled().fmode().memory_mapped());
+    ospi.dlr().write(|w| unsafe { w.bits(0x007F_FFFF) });
+    ospi.tcr().write(|w| unsafe { w.dcyc().bits(4) });
+    ospi.ccr().write(|w| {
+        w.imode()
+            .single_line()
+            .admode()
+            .four_lines()
+            .adsize()
+            .bits24()
+            .abmode()
+            .four_lines()
+            .dmode()
+            .four_lines()
+    });
+    // Every mapped transaction sends an instruction, so keep continuous reads disabled.
+    ospi.abr().write(|w| unsafe { w.bits(0xFF) });
+    ospi.ir().write(|w| unsafe { w.bits(0xEB) });
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+    Ok(())
 }
 
 // Epsilon reclaims bootloader RAM; false keeps its flash calls independent of that RAM.
@@ -123,7 +147,6 @@ pub fn program_external_flash<const BOOTLOADER: bool>(
             }
             let page = unsafe { core::slice::from_raw_parts(page.as_ptr().cast(), length) };
             leave_memory_mapped()?;
-            clear_block_protection::<BOOTLOADER>()?;
             write_enable()?;
             // Stock firmware tries both quad-program variants for BOM compatibility.
             let offset = address - EXTERNAL_FLASH_START;
@@ -271,34 +294,6 @@ fn leave_memory_mapped() -> Result<(), &'static str> {
     ospi.cr().write(|w| w.en().enabled());
     // Aborting the controller does not release the flash from instruction-less reads.
     write_command(0xFF, None, &[], 0x0000_0001)
-}
-
-fn enter_memory_mapped() -> Result<(), &'static str> {
-    wait_controller_idle()?;
-    let ospi = unsafe { &*stm32h725::OCTOSPI1::ptr() };
-    ospi.fcr().write(|w| unsafe { w.bits(0x1F) });
-    ospi.cr()
-        .write(|w| w.en().enabled().fmode().memory_mapped());
-    ospi.dlr().write(|w| unsafe { w.bits(0x007F_FFFF) });
-    ospi.tcr().write(|w| unsafe { w.dcyc().bits(4) });
-    ospi.ccr().write(|w| {
-        w.imode()
-            .single_line()
-            .admode()
-            .four_lines()
-            .adsize()
-            .bits24()
-            .abmode()
-            .four_lines()
-            .dmode()
-            .four_lines()
-    });
-    // Every mapped transaction sends an instruction, so keep continuous reads disabled.
-    ospi.abr().write(|w| unsafe { w.bits(0xFF) });
-    ospi.ir().write(|w| unsafe { w.bits(0xEB) });
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
-    Ok(())
 }
 
 pub(crate) fn flash_operation(

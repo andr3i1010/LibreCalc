@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32h7::stm32h725;
 
 use crate::mcu::{GPIOB, GPIOC, delay_us, set_field};
@@ -99,5 +100,20 @@ pub fn battery_is_charging() -> bool {
 
 /// Voltage-based estimate using Omicron's battery percentage calculation.
 pub fn battery_percentage() -> Result<u8, &'static str> {
-    Ok(((battery_voltage()? - 3.6) * 166.0).clamp(0.0, 100.0) as u8)
+    // 1% is 6 mV, less than the ADC noise and the dips under load: average a reading a second.
+    static MILLIVOLTS: AtomicU32 = AtomicU32::new(0);
+    static SAMPLED_MS: AtomicU32 = AtomicU32::new(0);
+    let now = (crate::micros() / 1000) as u32;
+    let mut average = MILLIVOLTS.load(Ordering::Relaxed);
+    if average == 0 || now.wrapping_sub(SAMPLED_MS.load(Ordering::Relaxed)) >= 1000 {
+        let sample = (battery_voltage()? * 1000.0) as u32;
+        average = if average == 0 {
+            sample
+        } else {
+            (average * 7 + sample) / 8
+        };
+        MILLIVOLTS.store(average, Ordering::Relaxed);
+        SAMPLED_MS.store(now, Ordering::Relaxed);
+    }
+    Ok(((average as f32 / 1000.0 - 3.6) * 166.0).clamp(0.0, 100.0) as u8)
 }

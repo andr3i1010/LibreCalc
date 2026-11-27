@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use librecalc_abi::{Error, setting};
+use librecalc_abi::{Error, SETTINGS as LOG, setting};
 use n0120_hardware::TRAMPOLINE;
 
-const LOG: u32 = 0x903F_0000;
 const LOG_SIZE: u32 = 0x1_0000;
 const LOG_SECTOR: u32 = 71;
 

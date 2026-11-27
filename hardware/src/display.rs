@@ -74,7 +74,7 @@ impl Display {
         }
     }
 
-    fn write_command(command: u8) {
+    pub(crate) fn write_command(command: u8) {
         unsafe {
             write_volatile(0x6000_0000 as *mut u16, u16::from(command));
         }
