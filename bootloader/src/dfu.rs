@@ -37,7 +37,7 @@ impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
     const MEM_INFO_STRING: &'static str = if RECOVERY {
         "@Flash/0x08000000/04*128Kg"
     } else {
-        "@Flash/0x08000000/04*128Kg/0x90000000/08*004Kg,01*032Kg,127*064Kg"
+        "@Flash/0x90000000/08*004Kg,01*032Kg,127*064Kg"
     };
     const TRANSFER_SIZE: u16 = 256;
     const PROGRAM_TIME_MS: u32 = 1;
@@ -48,7 +48,8 @@ impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
         let end = address
             .checked_add(length as u32)
             .ok_or(DFUMemError::Address)?;
-        if !((INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address)
+        if !(RECOVERY
+            && (INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address)
             && end <= INTERNAL_FLASH_END
             || self.external
                 && (EXTERNAL_FLASH_START..EXTERNAL_FLASH_END).contains(&address)
@@ -79,7 +80,8 @@ impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
             return Err(DFUMemError::Address);
         }
         let data = &self.buffer[..length];
-        if (INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address)
+        if RECOVERY
+            && (INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address)
             && end <= INTERNAL_FLASH_END
         {
             program_internal_flash(address, data).map_err(|_| DFUMemError::Prog)?;
@@ -104,7 +106,7 @@ impl<const RECOVERY: bool> DFUMemIO for Flash<RECOVERY> {
     }
 
     fn erase(&mut self, address: u32) -> Result<(), DFUMemError> {
-        if (INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address) {
+        if RECOVERY && (INTERNAL_FLASH_START..INTERNAL_FLASH_END).contains(&address) {
             erase_internal_flash(address).map_err(|_| DFUMemError::Erase)
         } else if self.external && (EXTERNAL_FLASH_START..EXTERNAL_FLASH_END).contains(&address) {
             let result = erase_external_flash::<true>(address).and_then(|_| {

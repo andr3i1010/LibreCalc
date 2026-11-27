@@ -257,7 +257,6 @@ unsafe extern "C" fn fault_entry() {
         "cmp r0, #0xC",
         "bne {kernel}",
         "bl {fault}",
-        // Continue the app that gets the screen, like svc.rs after a switch.
         "ldmia r0!, {{r4-r11, lr}}",
         "tst lr, #0x10",
         "it eq",
@@ -277,10 +276,9 @@ unsafe extern "C" {
     fn HardFault();
 }
 
-/// Closes the app that crashed; whoever launched it learns with `EFAULT`.
 extern "C" fn fault() -> usize {
     let scb = unsafe { &*SCB::PTR };
-    unsafe { scb.cfsr.write(scb.cfsr.read()) }; // Clear the fault status for the next one.
+    unsafe { scb.cfsr.write(scb.cfsr.read()) };
     let (id, _) = current().expect("app fault without a process");
     exit(id, Err(Error::EFAULT))
 }

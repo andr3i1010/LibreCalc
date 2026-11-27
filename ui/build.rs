@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-
-//! Turns assets/ into anti-aliased 4-bit glyphs for the kit: every font in FONTS, and the Lucide
-//! icons in ICONS at each size in ICON_SIZES, which are glyphs of the Lucide icon font.
-
 use std::{fmt::Write, fs};
 
-/// (name, weight, size in px). This order is `Font`'s.
 const FONTS: [(&str, &str, f32); 6] = [
     ("Small", "Medium", 11.0),
     ("SmallStrong", "SemiBold", 11.0),
@@ -14,10 +9,7 @@ const FONTS: [(&str, &str, f32); 6] = [
     ("Title", "Medium", 15.0),
     ("TitleStrong", "SemiBold", 15.0),
 ];
-/// Each icon comes in these sizes; graphite_ui picks by index.
 const ICON_SIZES: [f32; 3] = [16.0, 20.0, 24.0];
-/// Lucide's names and characters in assets/lucide.ttf (lucide-static 1.70.0, font/info.json).
-/// New icons go at the end: apps store an icon's number in their header.
 const ICONS: [(&str, char); 20] = [
     ("BatteryFull", '\u{e055}'),
     ("Calculator", '\u{e1bc}'),
@@ -41,8 +33,6 @@ const ICONS: [(&str, char); 20] = [
     ("Lock", '\u{e10b}'),
 ];
 
-/// A `FontData` literal: `characters` at `size`, 4-bit coverage packed two pixels per byte, low
-/// nibble first.
 fn rasterize(path: &str, size: f32, characters: impl Iterator<Item = char>) -> String {
     println!("cargo:rerun-if-changed={path}");
     let font = fontdue::Font::from_bytes(fs::read(path).unwrap(), Default::default()).unwrap();
@@ -86,7 +76,6 @@ fn main() {
         names.join(", ")
     )
     .unwrap();
-    // Printable ASCII and Latin-1; the control codes in between come out empty.
     out += "static FONTS: [FontData; 6] = [\n";
     for (_, weight, size) in FONTS {
         let path = format!("assets/PlusJakartaSans-{weight}.ttf");
@@ -105,7 +94,6 @@ fn main() {
         names.join(", ")
     )
     .unwrap();
-    // So a number stored in an app header turns back into an Icon.
     writeln!(
         out,
         "impl Icon {{ pub const ALL: [Icon; {}] = [Icon::{}]; }}",

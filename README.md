@@ -38,8 +38,10 @@ This creates:
 
 Build only the bootloader with `make bootloader`, or builtin apps + the kernel with `make kernel`.
 
-Use `build/librecalc-bootloader.dfu` to update the bootloader and call table together
-while keeping the external firmware.
+Normal DFU accepts only external flash. It refuses full stock DFUs, and the boot menu refuses
+Epsilon slots without the known version-1 bootloader header. To update the LibreCalc
+bootloader and call table while keeping external firmware, hold 6 while booting to enter recovery
+DFU, then install `build/librecalc-bootloader.dfu` and reset the calculator.
 
 Older bootloaders reject the call-table erase at `0x0807FC00`. To update one:
 
@@ -47,12 +49,12 @@ Older bootloaders reject the call-table erase at `0x0807FC00`. To update one:
    ```sh
    dfu-util -d 0483:a291 -a 0 -s 0x08000000 -D build/librecalc-bootloader.bin
    ```
-2. Press BACK and select DFU again so the new erase handler runs.
+2. Reboot while holding 6 to enter recovery DFU with the new erase handler.
 3. Install the complete bootloader image:
    ```sh
    dfu-util -d 0483:a291 -a 0 -D build/librecalc-bootloader.dfu
    ```
-4. After both elements finish downloading, press BACK to reboot.
+4. After both elements finish downloading, reset the calculator.
 
 Fast Rust checks use Cargo directly:
 

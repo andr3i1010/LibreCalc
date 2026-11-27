@@ -31,8 +31,6 @@ macro_rules! syscall_definitions {
             0x12 => fn apps(headers: &mut [u32]) -> u32 {
                 Ok(crate::process::apps(headers))
             }
-            /// Pauses this app and runs the one that launched it again; returns once this app runs
-            /// again. Fails with ENOENT when no app launched it.
             0x14 => fn pause() -> () {
                 *next = Some(crate::process::pause(owner)?);
                 Ok(())
@@ -83,7 +81,6 @@ macro_rules! syscall_definitions {
                     n0120_hardware::sleep_until(end.min(n0120_hardware::micros() + 20_000));
                 }
             }
-            // Bit 0: SHIFT for the next key. Bits 1-2: ALPHA, 1 for the next key, 2 locked.
             0x32 => fn modifiers() -> u32 {
                 Ok(crate::keyboard::modifiers())
             }
@@ -108,7 +105,6 @@ macro_rules! syscall_definitions {
     };
 }
 
-/// Writes `Key` and `CHARACTERS` from one list of keys.
 macro_rules! keys {
     ($($name:ident = $bit:literal $(=> $typed:expr)?,)*) => {
         #[repr(u8)]
@@ -116,9 +112,6 @@ macro_rules! keys {
         pub enum Key {
             $($name = $bit,)*
         }
-
-        /// What each key types, by its bit: alone, with SHIFT, with ALPHA (SHIFT + ALPHA is the
-        /// capital); 0 is nothing.
         pub const CHARACTERS: [[u8; 3]; 64] = {
             let mut table = [[0; 3]; 64];
             $($(table[$bit] = $typed;)?)*
@@ -127,7 +120,6 @@ macro_rules! keys {
     };
 }
 
-// Each key's bit in keyboard_scan (row × 6 + column), and what it types, as printed on the keys.
 keys! {
     Left = 0,
     Up = 1,

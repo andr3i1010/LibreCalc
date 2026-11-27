@@ -51,6 +51,14 @@ pub fn boot_slot(base: u32) -> Result<(), &'static str> {
     initialize_spi()?;
     let stack = unsafe { read_volatile((base + 0x20) as *const u32) };
     let reset = unsafe { read_volatile((base + 0x24) as *const u32) };
+    let epsilon = unsafe { read_volatile((base + 8) as *const u32) } == EPSILON_MAGIC;
+    if epsilon {
+        // Only Epsilon's v1 bootloader header is known to leave LibreCalc installed.
+        let header = unsafe { read_volatile((base + 0x1_0244) as *const [u32; 3]) };
+        if header != [0xDEC0_B007, 1, 0xDEC0_B007] {
+            return Err("Epsilon may replace LibreCalc bootloader");
+        }
+    }
     let stack_valid = stack & 7 == 0
         && [DTCM, AXI_SRAM]
             .iter()
@@ -61,7 +69,7 @@ pub fn boot_slot(base: u32) -> Result<(), &'static str> {
     if reset & 1 == 0 || !(base + FIRMWARE_START..base + FIRMWARE_LENGTH).contains(&(reset & !1)) {
         return Err("invalid reset address for this slot");
     }
-    if unsafe { read_volatile((base + 8) as *const u32) } == EPSILON_MAGIC {
+    if epsilon {
         initialize_system(EPSILON_CPU_MHZ);
         restore_pcb_revision()?;
         initialize_battery()?;
